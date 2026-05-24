@@ -57,7 +57,7 @@ if fact_txns:
         lit("1.0")
     ).withColumn(
         "snapshot_date",
-        lit(datetime.now().strftime("%Y-%m-%d"))
+        current_date()  # Use Spark's current_date() instead
     )
 
     logger.info(f"Built fact_fraud_risk: {fraud_risk.count()} records")

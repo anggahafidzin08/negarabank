@@ -27,7 +27,9 @@ except:
 # COMMAND ----------
 
 # Build fact table if events exist
-if events_silver.count() > 0:
+has_events = events_silver.count() > 0  # Single count check
+
+if has_events:
     fact_events = events_silver.join(
         dim_customer, on="customer_id", how="left"
     ).join(
@@ -67,5 +69,5 @@ print(f"✓ FACT_MOBILE_EVENTS prepared (streaming will populate)")
 # COMMAND ----------
 
 # Show sample if available
-if events_silver.count() > 0:
+if has_events:
     spark.read.format("delta").load(Paths.gold_table("fact_mobile_events")).limit(10).show()
