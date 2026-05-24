@@ -17,7 +17,7 @@ logger = logging.getLogger("SilverTransactionsTransform")
 bronze_path = Paths.bronze_table("transactions")
 txns_bronze = spark.read.format("delta").load(bronze_path)
 
-logger.info(f"Read {txns_bronze.count()} raw transactions from Bronze")
+logger.info(f"Read raw transactions from Bronze")
 
 # COMMAND ----------
 
@@ -38,23 +38,15 @@ logger.info(f"DQ checks: {dq_results['passed']} passed, {dq_results['failed']} f
 # COMMAND ----------
 
 # Reconciliation: Check for orphaned records (FK validation)
-txns_with_fk = txns_bronze.join(
+# Use left join to detect transactions without matching accounts
+txns_reconciled = txns_bronze.join(
     accounts_bronze.select("account_id").distinct(),
     on="account_id",
     how="left"
-)
-
-# Mark orphaned
-txns_reconciled = txns_bronze.withColumn(
+).withColumn(
     "reconciled",
-    when(
-        col("account_id").isin(accounts_bronze.select("account_id").rdd.flatMap(lambda x: x).collect()),
-        "true"
-    ).otherwise("false")
+    when(col("account_id").isNotNull(), "true").otherwise("false")
 )
-
-orphan_count = txns_reconciled.filter(col("reconciled") == "false").count()
-logger.info(f"Orphaned records detected: {orphan_count}")
 
 # COMMAND ----------
 
@@ -64,7 +56,7 @@ txns_dedup = txns_reconciled.withColumn("rn", row_number().over(window_spec)) \
     .filter(col("rn") == 1) \
     .drop("rn")
 
-logger.info(f"After dedup: {txns_dedup.count()} unique transactions")
+logger.info(f"After dedup: deduplication complete")
 
 # COMMAND ----------
 
@@ -90,7 +82,8 @@ txns_silver.write \
     .partitionBy("load_date") \
     .save(output_path)
 
-logger.info(f"✓ Silver transactions written: {txns_silver.count()} records")
+orphan_count = txns_silver.filter(col("reconciled") == "false").count()
+logger.info(f"✓ Silver transactions written: {txns_silver.count()} records ({orphan_count} orphaned)")
 print(f"✓ TRANSACTIONS transformed and loaded to Silver ({output_path})")
 
 # COMMAND ----------

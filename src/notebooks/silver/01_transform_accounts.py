@@ -17,7 +17,7 @@ logger = logging.getLogger("SilverAccountsTransform")
 bronze_path = Paths.bronze_table("accounts")
 accounts_bronze = spark.read.format("delta").load(bronze_path)
 
-logger.info(f"Read {accounts_bronze.count()} raw accounts from Bronze")
+logger.info(f"Read raw accounts from Bronze")
 
 # COMMAND ----------
 
@@ -39,7 +39,7 @@ accounts_dedup = accounts_bronze.withColumn("rn", row_number().over(window_spec)
     .filter(col("rn") == 1) \
     .drop("rn")
 
-logger.info(f"After dedup: {accounts_dedup.count()} unique accounts")
+logger.info(f"After dedup: deduplication complete")
 
 # COMMAND ----------
 
