@@ -13,14 +13,24 @@ variables:
     description: Prod Databricks workspace URL
     default: https://your-workspace-prod.cloud.databricks.com
 
+  databricks_token:
+    description: Dev Databricks Personal Access Token
+    sensitive: true
+
+  databricks_token_prod:
+    description: Prod Databricks Personal Access Token
+    sensitive: true
+
 targets:
   dev:
     workspace:
       host: https://dbc-d2fb7e57-7756.cloud.databricks.com/
+      token: ${var.databricks_token}
 
   prod:
     workspace:
       host: ${var.databricks_host_prod}
+      token: ${var.databricks_token_prod}
       
 include:
   - resources/*.yml
