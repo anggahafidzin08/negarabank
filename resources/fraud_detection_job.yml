@@ -8,7 +8,7 @@ resources:
       name: Real-time Fraud Detection (24/7 Streaming)
       description: Continuous Kafka consumer for mobile events with fraud scoring
       continuous:
-        pause_status: UNPAUSED
+        pause_status: PAUSED
 
       job_clusters:
         - job_cluster_key: streaming_cluster

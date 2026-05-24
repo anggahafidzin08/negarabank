@@ -54,9 +54,7 @@ resources:
             python_file: ${workspace.file_path}/src/python/bronze_extractor.py
             parameters:
               - "--table"
-              - "CREDIT_SCORES"
-          depends_on:
-            - task_key: extract_accounts
+              - "CUSTOMERS"
           timeout_seconds: 1800
 
         - task_key: extract_tickets
@@ -66,8 +64,6 @@ resources:
             parameters:
               - "--table"
               - "SUPPORT_TICKETS"
-          depends_on:
-            - task_key: extract_accounts
           timeout_seconds: 1800
 
         # ===== SILVER LAYER: Transform & Curate =====
