@@ -1,0 +1,34 @@
+# Bronze layer table extraction configuration
+# Each table declares its own loading strategy — no Python changes needed to add a new table.
+#
+# method:
+#   full_snapshot  — overwrite entire table each run (small/static tables)
+#   delta_load     — append only new rows since last load (large/high-velocity tables)
+#
+# predicate_slices (delta_load only):
+#   Splits the day into N parallel JDBC connections by time window.
+#   4 slices = 4 x 6-hour windows. Increase for very large tables.
+
+tables:
+  - name: ACCOUNTS
+    bronze_table: accounts
+    method: full_snapshot
+    write_mode: overwrite
+
+  - name: TRANSACTIONS
+    bronze_table: transactions
+    method: delta_load
+    write_mode: append
+    date_column: txn_date
+    lookback_days: 30
+    predicate_slices: 4
+
+  - name: CREDIT_SCORES
+    bronze_table: credit_scores
+    method: full_snapshot
+    write_mode: overwrite
+
+  - name: SUPPORT_TICKETS
+    bronze_table: support_tickets
+    method: full_snapshot
+    write_mode: overwrite

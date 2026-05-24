@@ -27,17 +27,23 @@ resources:
               spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
 
       tasks:
-        # ===== BRONZE LAYER: Extract =====
+        # ===== BRONZE LAYER: Extract (single script, table driven by --table arg) =====
         - task_key: extract_accounts
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/bronze/01_extract_oracle_accounts
+            python_file: ${workspace.file_path}/src/python/bronze_extractor.py
+            parameters:
+              - "--table"
+              - "ACCOUNTS"
           timeout_seconds: 1800
 
         - task_key: extract_transactions
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/bronze/02_extract_oracle_transactions
+            python_file: ${workspace.file_path}/src/python/bronze_extractor.py
+            parameters:
+              - "--table"
+              - "TRANSACTIONS"
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 3600
@@ -45,7 +51,10 @@ resources:
         - task_key: extract_credit_scores
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/bronze/03_extract_oracle_credit_scores
+            python_file: ${workspace.file_path}/src/python/bronze_extractor.py
+            parameters:
+              - "--table"
+              - "CREDIT_SCORES"
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 1800
@@ -53,7 +62,10 @@ resources:
         - task_key: extract_tickets
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/bronze/04_extract_oracle_tickets
+            python_file: ${workspace.file_path}/src/python/bronze_extractor.py
+            parameters:
+              - "--table"
+              - "SUPPORT_TICKETS"
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 1800
