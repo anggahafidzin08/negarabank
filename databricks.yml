@@ -1,0 +1,160 @@
+# databricks.yml - Main DAB configuration
+
+bundle:
+  name: negarabank-pipeline
+  description: NegaraBank data platform (batch ETL + real-time fraud detection)
+
+targets:
+  dev:
+    workspace:
+      host: ${var.databricks_host}
+      token: ${var.databricks_token}
+
+  prod:
+    workspace:
+      host: ${var.databricks_host_prod}
+      token: ${var.databricks_token_prod}
+
+variables:
+  databricks_host:
+    description: Dev Databricks workspace URL
+    default: https://your-workspace-dev.cloud.databricks.com
+
+  databricks_host_prod:
+    description: Prod Databricks workspace URL
+    default: https://your-workspace-prod.cloud.databricks.com
+
+  databricks_token:
+    description: Dev Databricks API token
+    default: ""
+
+  databricks_token_prod:
+    description: Prod Databricks API token
+    default: ""
+
+resources:
+  # Compute resources
+  batch_cluster:
+    type: clusters
+    definition:
+      cluster_name: negarabank-batch
+      spark_version: 13.3.x-scala2.12
+      node_type_id: i3en.3xlarge
+      num_workers: 2
+      aws_attributes:
+        availability: SPOT
+        zone_id: us-east-1a
+      spark_conf:
+        spark.sql.adaptive.enabled: "true"
+        spark.sql.adaptive.coalescePartitions.enabled: "true"
+        spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+        spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+
+  streaming_cluster:
+    type: clusters
+    definition:
+      cluster_name: negarabank-streaming
+      spark_version: 13.3.x-scala2.12
+      node_type_id: i3en.2xlarge
+      num_workers: 2
+      aws_attributes:
+        availability: ON_DEMAND
+        zone_id: us-east-1a
+      autoscale:
+        min_workers: 2
+        max_workers: 4
+      spark_conf:
+        spark.sql.adaptive.enabled: "true"
+        spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+      init_scripts:
+        - s3://negarabank-scripts/install-kafka.sh
+
+  # Jobs
+  batch_etl_job:
+    type: jobs
+    definition:
+      name: Daily Batch ETL (Oracle → Bronze → Silver → Gold)
+      description: Extract from Oracle, transform, load to medallion layers
+      schedule:
+        quartz_cron_expression: 0 0 2 * * ?  # 2 AM daily
+        timezone_id: UTC
+      tasks:
+        - task_key: extract_accounts
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/bronze/01_extract_oracle_accounts
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          timeout_seconds: 1800
+
+        - task_key: extract_transactions
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/bronze/02_extract_oracle_transactions
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - task_key: extract_accounts
+          timeout_seconds: 3600
+
+        - task_key: extract_credit_scores
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/bronze/03_extract_oracle_credit_scores
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - task_key: extract_accounts
+          timeout_seconds: 1800
+
+        - task_key: extract_tickets
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/bronze/04_extract_oracle_tickets
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - task_key: extract_accounts
+          timeout_seconds: 1800
+
+        - task_key: transform_silver
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/silver/01_transform_accounts
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - task_key: extract_accounts
+            - task_key: extract_transactions
+            - task_key: extract_credit_scores
+            - task_key: extract_tickets
+          timeout_seconds: 1800
+
+        - task_key: build_gold
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/01_build_dim_customer
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - task_key: transform_silver
+          timeout_seconds: 1800
+
+        - task_key: dq_validation
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/08_build_fraud_alert_table
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - task_key: build_gold
+          timeout_seconds: 1800
+
+  fraud_detection_job:
+    type: jobs
+    definition:
+      name: Real-time Fraud Detection (24/7 Streaming)
+      description: Continuous Kafka consumer for fraud scoring
+      deployment:
+        kind: COMPLETE
+      tasks:
+        - task_key: fraud_streaming
+          spark_python_task:
+            python_file: ${bundle.root_path}/src/notebooks/streaming/fraud_detection_job.py
+          cluster_id: ${resources.streaming_cluster.cluster_id}
+          timeout_seconds: 86400  # 24 hours
+
+# Permissions & ACLs (Unity Catalog)
+permissions:
+  - level: CAN_MANAGE
+    group_name: data-engineering-team
+  - level: CAN_RUN
+    group_name: data-analytics-team
+  - level: CAN_VIEW
+    group_name: business-analysts
