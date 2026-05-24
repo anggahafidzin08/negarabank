@@ -1,5 +1,31 @@
+# Databricks
+.databricks/
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Databricks artifacts
+*.dbc
+databricks-artifacts/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code & project files
 .claude
 .remember
 .superpowers
-docs/
 negarabank_dataset/
