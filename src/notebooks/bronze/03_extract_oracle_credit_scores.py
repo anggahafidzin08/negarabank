@@ -23,14 +23,18 @@ logger.info("Starting CREDIT_SCORES extraction...")
 # Extract full credit scores snapshot (daily)
 scores_df = extractor.extract_full_table("CREDIT_SCORES")
 
-logger.info(f"Extracted {scores_df.count()} credit score records")
+record_count = scores_df.count()
+logger.info(f"Extracted {record_count} credit score records")
 
 # COMMAND ----------
 
-# Add load metadata
-load_date = datetime.now().strftime("%Y-%m-%d")
+# Add load metadata (capture once, reuse)
+load_timestamp = datetime.now()
+load_date = load_timestamp.strftime("%Y-%m-%d")
+load_timestamp_iso = load_timestamp.isoformat()
+
 scores_df = scores_df.withColumn("load_date", lit(load_date))
-scores_df = scores_df.withColumn("load_timestamp", lit(datetime.now().isoformat()))
+scores_df = scores_df.withColumn("load_timestamp", lit(load_timestamp_iso))
 
 # Write to Bronze
 output_path = Paths.bronze_table("credit_scores")
@@ -41,7 +45,7 @@ scores_df.write \
     .save(output_path)
 
 logger.info(f"✓ Credit scores loaded to: {output_path}")
-print(f"✓ CREDIT_SCORES: {scores_df.count()} records written to Bronze")
+print(f"✓ CREDIT_SCORES: {record_count} records written to Bronze")
 
 # COMMAND ----------
 

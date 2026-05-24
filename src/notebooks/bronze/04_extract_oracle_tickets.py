@@ -23,14 +23,18 @@ logger.info("Starting SUPPORT_TICKETS extraction...")
 # Extract support tickets (batch daily load)
 tickets_df = extractor.extract_full_table("SUPPORT_TICKETS")
 
-logger.info(f"Extracted {tickets_df.count()} support ticket records")
+record_count = tickets_df.count()
+logger.info(f"Extracted {record_count} support ticket records")
 
 # COMMAND ----------
 
-# Add load metadata
-load_date = datetime.now().strftime("%Y-%m-%d")
+# Add load metadata (capture once, reuse)
+load_timestamp = datetime.now()
+load_date = load_timestamp.strftime("%Y-%m-%d")
+load_timestamp_iso = load_timestamp.isoformat()
+
 tickets_df = tickets_df.withColumn("load_date", lit(load_date))
-tickets_df = tickets_df.withColumn("load_timestamp", lit(datetime.now().isoformat()))
+tickets_df = tickets_df.withColumn("load_timestamp", lit(load_timestamp_iso))
 
 # Write to Bronze
 output_path = Paths.bronze_table("support_tickets")
@@ -41,7 +45,7 @@ tickets_df.write \
     .save(output_path)
 
 logger.info(f"✓ Support tickets loaded to: {output_path}")
-print(f"✓ SUPPORT_TICKETS: {tickets_df.count()} records written to Bronze")
+print(f"✓ SUPPORT_TICKETS: {record_count} records written to Bronze")
 
 # COMMAND ----------
 
