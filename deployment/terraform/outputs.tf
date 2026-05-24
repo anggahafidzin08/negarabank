@@ -22,6 +22,10 @@ output "s3_gold_bucket" {
   value = aws_s3_bucket.gold.id
 }
 
+output "s3_checkpoints_bucket" {
+  value = aws_s3_bucket.checkpoints.id
+}
+
 output "security_group_id" {
   value = aws_security_group.ec2_jdbc_sg.id
 }

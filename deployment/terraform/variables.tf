@@ -42,3 +42,9 @@ variable "kafka_bootstrap_servers" {
   description = "Kafka bootstrap servers (comma-separated)"
   type        = string
 }
+
+variable "oracle_network_cidr" {
+  description = "CIDR block for on-prem Oracle network"
+  type        = string
+  default     = "203.0.113.0/24"
+}

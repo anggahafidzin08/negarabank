@@ -64,10 +64,14 @@ resource "aws_iam_role_policy" "ec2_secrets_access" {
       {
         Effect = "Allow"
         Action = [
+          "s3:ListBucket",
           "s3:GetObject",
           "s3:PutObject"
         ]
-        Resource = "arn:aws:s3:::negarabank-*/*"
+        Resource = [
+          "arn:aws:s3:::negarabank-*",
+          "arn:aws:s3:::negarabank-*/*"
+        ]
       }
     ]
   })
@@ -84,8 +88,8 @@ resource "aws_security_group" "ec2_jdbc_sg" {
   description = "Security group for EC2 JDBC gateway"
 
   ingress {
-    from_port   = 5432
-    to_port     = 5432
+    from_port   = 1521
+    to_port     = 1521
     protocol    = "tcp"
     cidr_blocks = ["10.0.0.0/8"]  # Databricks VPC CIDR
   }
@@ -94,7 +98,7 @@ resource "aws_security_group" "ec2_jdbc_sg" {
     from_port   = 1521
     to_port     = 1521
     protocol    = "tcp"
-    cidr_blocks = ["203.0.113.0/24"]  # On-prem Oracle network (example)
+    cidr_blocks = [var.oracle_network_cidr]
   }
 
   egress {
@@ -120,6 +124,47 @@ resource "aws_s3_bucket" "gold" {
 
 resource "aws_s3_bucket" "checkpoints" {
   bucket = "negarabank-checkpoints-${var.aws_account_id}"
+}
+
+# S3 Server-Side Encryption Configurations
+resource "aws_s3_bucket_server_side_encryption_configuration" "bronze" {
+  bucket = aws_s3_bucket.bronze.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "silver" {
+  bucket = aws_s3_bucket.silver.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "gold" {
+  bucket = aws_s3_bucket.gold.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "checkpoints" {
+  bucket = aws_s3_bucket.checkpoints.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
 }
 
 # S3 Intelligent-Tiering Configuration
