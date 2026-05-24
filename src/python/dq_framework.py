@@ -34,7 +34,6 @@ class DataQualityFramework:
         self.spark = spark
         self.output_path = output_path
         self.checks: List[DataQualityCheck] = []
-        self.results = []
 
     def add_null_check(self, table: str, column: str, threshold: float = 0.05) -> DataQualityCheck:
         """
