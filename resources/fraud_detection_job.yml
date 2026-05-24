@@ -14,5 +14,5 @@ resources:
         - task_key: fraud_streaming
           existing_cluster_id: ${resources.clusters.streaming_cluster.id}
           spark_python_task:
-            python_file: ${bundle.root_path}/src/notebooks/streaming/fraud_detection_job.py
+            python_file: ${workspace.file_path}/src/notebooks/streaming/fraud_detection_job.py
           timeout_seconds: 0
