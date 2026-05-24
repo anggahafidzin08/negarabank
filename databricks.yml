@@ -2,35 +2,28 @@
 
 bundle:
   name: negarabank-pipeline
-  description: NegaraBank data platform (batch ETL + real-time fraud detection)
 
-targets:
-  dev:
-    workspace:
-      host: ${var.databricks_host}
-      token: ${var.databricks_token}
-
-  prod:
-    workspace:
-      host: ${var.databricks_host_prod}
-      token: ${var.databricks_token_prod}
 
 variables:
   databricks_host:
     description: Dev Databricks workspace URL
-    default: https://your-workspace-dev.cloud.databricks.com
+    default: https://dbc-d2fb7e57-7756.cloud.databricks.com/
 
   databricks_host_prod:
     description: Prod Databricks workspace URL
     default: https://your-workspace-prod.cloud.databricks.com
 
-  databricks_token:
-    description: Dev Databricks API token
-    sensitive: true
+targets:
+  dev:
+    workspace:
+      host: https://dbc-d2fb7e57-7756.cloud.databricks.com/
 
-  databricks_token_prod:
-    description: Prod Databricks API token
-    sensitive: true
+  prod:
+    workspace:
+      host: ${var.databricks_host_prod}
+      
+include:
+  - resources/*.yml
 
 # Resources are imported from separate files in the resources/ directory
 # - resources/clusters.yml: Batch and streaming cluster definitions

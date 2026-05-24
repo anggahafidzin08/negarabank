@@ -1,25 +1,9 @@
-# Cluster definitions for NegaraBank pipeline
+# All-purpose cluster for 24/7 streaming fraud detection
+# Batch ETL uses ephemeral job_clusters defined in batch_etl_job.yml
 
 resources:
-  batch_cluster:
-    type: clusters
-    definition:
-      cluster_name: negarabank-batch
-      spark_version: 13.3.x-scala2.12
-      node_type_id: i3en.3xlarge
-      num_workers: 2
-      aws_attributes:
-        availability: SPOT
-        zone_id: ap-southeast-1a
-      spark_conf:
-        spark.sql.adaptive.enabled: "true"
-        spark.sql.adaptive.coalescePartitions.enabled: "true"
-        spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
-        spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
-
-  streaming_cluster:
-    type: clusters
-    definition:
+  clusters:
+    streaming_cluster:
       cluster_name: negarabank-streaming
       spark_version: 13.3.x-scala2.12
       node_type_id: i3en.2xlarge
@@ -34,5 +18,3 @@ resources:
         spark.sql.adaptive.enabled: "true"
         spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
         spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
-      init_scripts:
-        - s3://negarabank-scripts/install-kafka.sh

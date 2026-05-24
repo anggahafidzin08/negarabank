@@ -1,20 +1,18 @@
 # Fraud Detection Streaming Job: Kafka → Real-time Fraud Alerts
-# Schedule: 24/7 continuous (always running)
+# Mode: continuous (auto-restart on failure)
 # Latency SLA: 10-15 seconds (event → alert)
+# Cluster: all-purpose streaming_cluster (persistent, defined in clusters.yml)
 
 resources:
-  fraud_detection_job:
-    type: jobs
-    definition:
+  jobs:
+    fraud_detection_job:
       name: Real-time Fraud Detection (24/7 Streaming)
       description: Continuous Kafka consumer for mobile events with fraud scoring
-      deployment:
-        kind: COMPLETE
-      trigger:
+      continuous:
         pause_status: UNPAUSED
       tasks:
         - task_key: fraud_streaming
+          existing_cluster_id: ${resources.clusters.streaming_cluster.id}
           spark_python_task:
             python_file: ${bundle.root_path}/src/notebooks/streaming/fraud_detection_job.py
-          cluster_id: ${resources.streaming_cluster.cluster_id}
-          timeout_seconds: 86400  # 24 hours (continuous job)
+          timeout_seconds: 0

@@ -1,131 +1,141 @@
 # Batch ETL Job: Oracle → Bronze → Silver → Gold medallion pipeline
-# Schedule: 2 AM UTC daily
-# Expected Duration: 15-30 minutes
+# Schedule: 2 AM UTC daily | Expected Duration: 15-30 minutes
+# Cluster: ephemeral job_cluster (spins up/down per run — cost efficient)
 
 resources:
-  batch_etl_job:
-    type: jobs
-    definition:
+  jobs:
+    batch_etl_job:
       name: Daily Batch ETL (Oracle → Bronze → Silver → Gold)
       description: Extract from Oracle, transform, load to medallion layers
       schedule:
-        quartz_cron_expression: 0 0 2 * * ?  # 2 AM daily
+        quartz_cron_expression: "0 0 2 * * ?"
         timezone_id: UTC
 
-      # Error Handling Strategy:
-      # - Timeout: 1800s (30m) for quick extracts, 3600s (60m) for large transaction tables
-      # - Retry: Default 3 attempts per task on transient failures
-      # - Alerting: Job failures trigger #data-eng-alerts Slack channel notification
+      job_clusters:
+        - job_cluster_key: batch_cluster
+          new_cluster:
+            spark_version: 13.3.x-scala2.12
+            node_type_id: i3en.3xlarge
+            num_workers: 2
+            aws_attributes:
+              availability: SPOT
+              zone_id: ap-southeast-1a
+            spark_conf:
+              spark.sql.adaptive.enabled: "true"
+              spark.sql.adaptive.coalescePartitions.enabled: "true"
+              spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+              spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
 
       tasks:
         # ===== BRONZE LAYER: Extract =====
         - task_key: extract_accounts
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/01_extract_oracle_accounts
-          cluster_id: ${resources.batch_cluster.cluster_id}
           timeout_seconds: 1800
 
         - task_key: extract_transactions
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/02_extract_oracle_transactions
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - extract_accounts
+            - task_key: extract_accounts
           timeout_seconds: 3600
 
         - task_key: extract_credit_scores
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/03_extract_oracle_credit_scores
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - extract_accounts
+            - task_key: extract_accounts
           timeout_seconds: 1800
 
         - task_key: extract_tickets
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/04_extract_oracle_tickets
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - extract_accounts
+            - task_key: extract_accounts
           timeout_seconds: 1800
 
         # ===== SILVER LAYER: Transform & Curate =====
         - task_key: transform_accounts
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/silver/01_transform_accounts
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - extract_accounts
+            - task_key: extract_accounts
           timeout_seconds: 1800
 
         - task_key: transform_transactions
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/silver/02_transform_transactions
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - extract_transactions
-            - transform_accounts
+            - task_key: extract_transactions
+            - task_key: transform_accounts
           timeout_seconds: 1800
 
-        # ===== GOLD LAYER: Dimensional & Fact Tables =====
+        # ===== GOLD LAYER: Dimensions =====
         - task_key: build_dim_customer
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/01_build_dim_customer
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - transform_accounts
+            - task_key: transform_accounts
           timeout_seconds: 1800
 
         - task_key: build_dim_account
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/02_build_dim_account
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - transform_accounts
+            - task_key: transform_accounts
           timeout_seconds: 1800
 
         - task_key: build_dim_date
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/03_build_dim_date
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - transform_transactions
+            - task_key: transform_transactions
           timeout_seconds: 1800
 
         - task_key: build_dim_event_type
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/04_build_dim_event_type
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - transform_transactions
+            - task_key: transform_transactions
           timeout_seconds: 1800
 
+        # ===== GOLD LAYER: Facts =====
         - task_key: build_fact_transactions
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/05_build_fact_transactions
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - build_dim_customer
-            - build_dim_account
-            - build_dim_date
-            - transform_transactions
+            - task_key: build_dim_customer
+            - task_key: build_dim_account
+            - task_key: build_dim_date
+            - task_key: transform_transactions
           timeout_seconds: 1800
 
         - task_key: build_fact_mobile_events
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/06_build_fact_mobile_events
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - build_dim_customer
-            - build_dim_event_type
-            - build_dim_date
+            - task_key: build_dim_customer
+            - task_key: build_dim_event_type
+            - task_key: build_dim_date
           timeout_seconds: 1800
 
         - task_key: build_fact_fraud_risk
+          job_cluster_key: batch_cluster
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/07_build_fact_fraud_risk
-          cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - build_fact_transactions
-            - build_dim_customer
+            - task_key: build_fact_transactions
+            - task_key: build_dim_customer
           timeout_seconds: 1800
