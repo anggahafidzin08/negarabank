@@ -17,6 +17,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from typing import Optional
+from dotenv import load_dotenv
 
 import yaml
 from pyspark.sql import SparkSession
@@ -25,11 +26,12 @@ from pyspark.sql.functions import col, lit, max as spark_max
 from src.python.config import get_oracle_credentials, Paths
 from src.python.jdbc_extractor import JDBCExtractor
 
+load_dotenv()  # Load environment variables from .env file
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BronzeExtractor")
 
 DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "../config/bronze_tables.yml")
-CHECKPOINT_TABLE = "checkpoint_bronze_metadata"
+CHECKPOINT_TABLE = os.getenv("CHECKPOINT_METADATA_TABLE")
 
 
 class BronzeExtractor:
@@ -49,14 +51,18 @@ class BronzeExtractor:
     # ------------------------------------------------------------------
 
     def _read_checkpoint(self, table_name: str) -> Optional[datetime]:
-        """Return last_ingestion_timestamps for table_name, or None if not found."""
-        checkpoint_path = Paths.bronze_table(CHECKPOINT_TABLE)
+        """Return last_ingestion_timestamps for table_name, or None if not found.
+
+        Uses spark.catalog.tableExists(CHECKPOINT_TABLE) where CHECKPOINT_TABLE is the
+        fully-qualified Unity Catalog name (catalog.schema.table), e.g.
+        'negarabank.bronze.checkpoint_bronze_metadata'. This avoids fragile S3-path
+        probing and works regardless of the underlying storage location.
+        """
+        if not self.spark.catalog.tableExists(CHECKPOINT_TABLE):
+            return None
         try:
-            from delta.tables import DeltaTable
-            if not DeltaTable.isDeltaTable(self.spark, checkpoint_path):
-                return None
             row = (
-                self.spark.read.format("delta").load(checkpoint_path)
+                self.spark.table(CHECKPOINT_TABLE)
                 .filter(col("table_name") == table_name)
                 .select("last_ingestion_timestamps")
                 .orderBy(col("last_ingestion_timestamps").desc())
@@ -70,18 +76,21 @@ class BronzeExtractor:
         return None
 
     def _write_checkpoint(self, table_name: str, max_ts: datetime) -> None:
-        """Upsert last_ingestion_timestamps into checkpoint_bronze_metadata."""
+        """Upsert last_ingestion_timestamps into the checkpoint table.
+
+        First write uses saveAsTable to register in Unity Catalog.
+        Subsequent writes use DeltaTable.forName for a proper MERGE upsert.
+        """
         from delta.tables import DeltaTable
 
-        checkpoint_path = Paths.bronze_table(CHECKPOINT_TABLE)
         new_row = self.spark.createDataFrame(
             [(table_name, max_ts, datetime.now())],
             ["table_name", "last_ingestion_timestamps", "updated_at"],
         )
 
-        if DeltaTable.isDeltaTable(self.spark, checkpoint_path):
+        if self.spark.catalog.tableExists(CHECKPOINT_TABLE):
             (
-                DeltaTable.forPath(self.spark, checkpoint_path)
+                DeltaTable.forName(self.spark, CHECKPOINT_TABLE)
                 .alias("target")
                 .merge(new_row.alias("source"), "target.table_name = source.table_name")
                 .whenMatchedUpdateAll()
@@ -89,7 +98,8 @@ class BronzeExtractor:
                 .execute()
             )
         else:
-            new_row.write.format("delta").mode("overwrite").save(checkpoint_path)
+            # First-ever write: register table in Unity Catalog via saveAsTable
+            new_row.write.format("delta").mode("overwrite").saveAsTable(CHECKPOINT_TABLE)
 
         logger.info(f"[{table_name}] Checkpoint updated → {max_ts.isoformat()}")
 
