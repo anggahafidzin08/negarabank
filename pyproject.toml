@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "negarabank-pipeline"
+version = "0.1.0"
+description = "Production-grade data platform for transaction processing and fraud detection"
+requires-python = ">=3.10"
+authors = [
+    {name = "NegaraBank Team", email = "dev@negarabank.com"}
+]
+dependencies = [
+    "databricks-sdk==0.20.0",
+    "pyspark==3.5.0",
+    "delta-spark==3.1.0",
+    "boto3==1.28.0",
+    "kafka-python==2.0.2",
+    "mlflow==2.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-cov==4.1.0",
+    "black==23.12.0",
+    "flake8==6.1.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=html",
+]
+markers = [
+    "integration: integration tests",
+    "unit: unit tests",
+    "slow: slow tests",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.flake8]
+max-line-length = 100
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    ".eggs",
+    ".tox",
+]
+ignore = [
+    "E203",  # whitespace before ':'
+    "E501",  # line too long (handled by black)
+    "W503",  # line break before binary operator
+]

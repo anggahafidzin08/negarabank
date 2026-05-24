@@ -19,9 +19,31 @@ Production-grade data platform optimizing transaction processing, real-time frau
 - Python 3.10+
 
 ### Local Setup
+
+**Create virtual environment:**
 ```bash
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+```
+
+**Activate virtual environment:**
+
+Linux/macOS:
+```bash
+source venv/bin/activate
+```
+
+Windows (PowerShell):
+```powershell
+venv\Scripts\Activate.ps1
+```
+
+Windows (Command Prompt):
+```cmd
+venv\Scripts\activate.bat
+```
+
+**Install dependencies:**
+```bash
 pip install -r requirements-dev.txt
 ```
 
