@@ -30,30 +30,30 @@ resources:
         # ===== BRONZE LAYER: Extract =====
         - task_key: extract_accounts
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/bronze/01_extract_oracle_accounts
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/bronze/01_extract_oracle_accounts
           timeout_seconds: 1800
 
         - task_key: extract_transactions
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/bronze/02_extract_oracle_transactions
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/bronze/02_extract_oracle_transactions
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 3600
 
         - task_key: extract_credit_scores
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/bronze/03_extract_oracle_credit_scores
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/bronze/03_extract_oracle_credit_scores
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 1800
 
         - task_key: extract_tickets
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/bronze/04_extract_oracle_tickets
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/bronze/04_extract_oracle_tickets
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 1800
@@ -61,16 +61,16 @@ resources:
         # ===== SILVER LAYER: Transform & Curate =====
         - task_key: transform_accounts
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/silver/01_transform_accounts
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/silver/01_transform_accounts
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 1800
 
         - task_key: transform_transactions
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/silver/02_transform_transactions
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/silver/02_transform_transactions
           depends_on:
             - task_key: extract_transactions
             - task_key: transform_accounts
@@ -79,32 +79,32 @@ resources:
         # ===== GOLD LAYER: Dimensions =====
         - task_key: build_dim_customer
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/01_build_dim_customer
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/01_build_dim_customer
           depends_on:
             - task_key: transform_accounts
           timeout_seconds: 1800
 
         - task_key: build_dim_account
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/02_build_dim_account
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/02_build_dim_account
           depends_on:
             - task_key: transform_accounts
           timeout_seconds: 1800
 
         - task_key: build_dim_date
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/03_build_dim_date
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/03_build_dim_date
           depends_on:
             - task_key: transform_transactions
           timeout_seconds: 1800
 
         - task_key: build_dim_event_type
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/04_build_dim_event_type
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/04_build_dim_event_type
           depends_on:
             - task_key: transform_transactions
           timeout_seconds: 1800
@@ -112,8 +112,8 @@ resources:
         # ===== GOLD LAYER: Facts =====
         - task_key: build_fact_transactions
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/05_build_fact_transactions
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/05_build_fact_transactions
           depends_on:
             - task_key: build_dim_customer
             - task_key: build_dim_account
@@ -123,8 +123,8 @@ resources:
 
         - task_key: build_fact_mobile_events
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/06_build_fact_mobile_events
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/06_build_fact_mobile_events
           depends_on:
             - task_key: build_dim_customer
             - task_key: build_dim_event_type
@@ -133,8 +133,8 @@ resources:
 
         - task_key: build_fact_fraud_risk
           job_cluster_key: batch_cluster
-          notebook_task:
-            notebook_path: ${workspace.file_path}/src/notebooks/gold/07_build_fact_fraud_risk
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/07_build_fact_fraud_risk
           depends_on:
             - task_key: build_fact_transactions
             - task_key: build_dim_customer

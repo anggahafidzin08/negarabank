@@ -33,9 +33,5 @@ include:
 # Permissions & ACLs (Workspace-level scope)
 # These permissions apply at the workspace level to all bundle resources
 permissions:
-  - level: CAN_MANAGE
-    group_name: data-engineering-team
-  - level: CAN_RUN
-    group_name: data-analytics-team
-  - level: CAN_VIEW
-    group_name: business-analysts
+  - user_name: hafidzin.angga@outlook.com
+    level: CAN_MANAGE

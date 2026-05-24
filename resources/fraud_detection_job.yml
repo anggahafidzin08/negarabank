@@ -1,7 +1,6 @@
 # Fraud Detection Streaming Job: Kafka → Real-time Fraud Alerts
-# Mode: continuous (auto-restart on failure)
+# Mode: continuous (auto-restart on failure, reads from Delta checkpoint)
 # Latency SLA: 10-15 seconds (event → alert)
-# Cluster: all-purpose streaming_cluster (persistent, defined in clusters.yml)
 
 resources:
   jobs:
@@ -10,9 +9,27 @@ resources:
       description: Continuous Kafka consumer for mobile events with fraud scoring
       continuous:
         pause_status: UNPAUSED
+
+      job_clusters:
+        - job_cluster_key: streaming_cluster
+          new_cluster:
+            spark_version: 13.3.x-scala2.12
+            node_type_id: i3en.2xlarge
+            num_workers: 2
+            aws_attributes:
+              availability: ON_DEMAND
+              zone_id: ap-southeast-1a
+            autoscale:
+              min_workers: 2
+              max_workers: 4
+            spark_conf:
+              spark.sql.adaptive.enabled: "true"
+              spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+              spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+
       tasks:
         - task_key: fraud_streaming
-          existing_cluster_id: ${resources.clusters.streaming_cluster.id}
+          job_cluster_key: streaming_cluster
           spark_python_task:
             python_file: ${workspace.file_path}/src/notebooks/streaming/fraud_detection_job.py
           timeout_seconds: 0
