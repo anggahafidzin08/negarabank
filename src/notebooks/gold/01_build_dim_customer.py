@@ -18,6 +18,9 @@ accounts_silver = spark.read.format("delta").load(Paths.silver_table("accounts")
 
 # COMMAND ----------
 
+# Capture timestamp once for consistency
+current_timestamp = datetime.now().strftime("%Y-%m-%d")
+
 # Prepare new records
 new_customers = accounts_silver.select(
     col("customer_id"),
@@ -25,12 +28,12 @@ new_customers = accounts_silver.select(
     lit(None).cast("string").alias("email"),  # Would come from CRM
     lit("standard").alias("segment"),  # Derived from account info
     col("balance").alias("risk_score"),
-    lit(datetime.now().strftime("%Y-%m-%d")).alias("effective_date"),
+    lit(current_timestamp).alias("effective_date"),
     lit(None).cast("string").alias("end_date"),
     lit("true").alias("is_current"),
 ).distinct()
 
-logger.info(f"Processing {new_customers.count()} customers")
+logger.info(f"Processing customers from Silver")
 
 # COMMAND ----------
 
@@ -73,31 +76,55 @@ if has_existing:
         col("segment"),
         col("risk_score"),
         col("effective_date"),
-        lit(datetime.now().strftime("%Y-%m-%d")).alias("end_date"),
+        lit(current_timestamp).alias("end_date"),
         lit("false").alias("is_current"),
     )
 
     # Insert new versions of changed records
     changed_updates = changed.select(
-        lit(None).cast("long").alias("customer_key"),  # Will get new key
+        col("current_records.customer_key"),  # Reuse existing key
         col("customer_id"),
         col("new_customers.name"),
         col("new_customers.email"),
         col("new_customers.segment"),
         col("new_customers.risk_score"),
-        lit(datetime.now().strftime("%Y-%m-%d")).alias("effective_date"),
+        lit(current_timestamp).alias("effective_date"),
         lit(None).cast("string").alias("end_date"),
         lit("true").alias("is_current"),
     )
 
     # Combine: existing non-changed + expired + new changes
-    final_dim = existing_customers.filter(
-        col("customer_id").isin(
-            current_records.select("customer_id")
-            .subtract(changed.select(col("customer_id")))
-            .rdd.flatMap(lambda x: x).collect()
+    # Use anti-join to avoid .collect() scalability risk
+    unchanged_records = current_records.join(
+        changed.select(col("customer_id")).distinct(),
+        on="customer_id",
+        how="left_anti"  # Keeps rows from left that don't match right
+    )
+
+    final_dim = unchanged_records.union(expired_records).union(changed_updates)
+
+    # Handle new customers not in existing table
+    all_customer_ids = new_customers.select("customer_id")
+    existing_customer_ids = current_records.select("customer_id")
+    new_only = all_customer_ids.join(
+        existing_customer_ids,
+        on="customer_id",
+        how="left_anti"
+    )
+
+    if new_only.count() > 0:
+        new_customers_only = new_customers.join(
+            new_only,
+            on="customer_id",
+            how="inner"
         )
-    ).union(expired_records).union(changed_updates)
+        # Assign new customer_keys
+        max_key = final_dim.agg(spark_max("customer_key")).collect()[0][0] or 0
+        new_with_keys = new_customers_only.withColumn(
+            "customer_key",
+            row_number().over(Window.orderBy("customer_id")) + max_key
+        )
+        final_dim = final_dim.union(new_with_keys)
 
 else:
     # First load: assign customer_keys

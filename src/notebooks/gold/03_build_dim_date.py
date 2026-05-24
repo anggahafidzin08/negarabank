@@ -32,7 +32,7 @@ while current_date <= end_date:
 
 dates_df = spark.createDataFrame(dates)
 
-logger.info(f"Generated {dates_df.count()} date records")
+logger.info(f"Generated date records from {start_date.date()} to {end_date.date()}")
 
 # COMMAND ----------
 
