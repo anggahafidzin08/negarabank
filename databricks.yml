@@ -26,11 +26,11 @@ variables:
 
   databricks_token:
     description: Dev Databricks API token
-    default: ""
+    sensitive: true
 
   databricks_token_prod:
     description: Prod Databricks API token
-    default: ""
+    sensitive: true
 
 resources:
   # Compute resources
@@ -66,10 +66,15 @@ resources:
       spark_conf:
         spark.sql.adaptive.enabled: "true"
         spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+        spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
       init_scripts:
         - s3://negarabank-scripts/install-kafka.sh
 
   # Jobs
+  # Error Handling Strategy:
+  # - Timeout: 1800s (30m) for quick extracts, 3600s (60m) for large transaction tables
+  # - Retry: Default 3 attempts per task on transient failures
+  # - Alerting: Job failures trigger #data-eng-alerts Slack channel notification
   batch_etl_job:
     type: jobs
     definition:
@@ -90,7 +95,7 @@ resources:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/02_extract_oracle_transactions
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - task_key: extract_accounts
+            - extract_accounts
           timeout_seconds: 3600
 
         - task_key: extract_credit_scores
@@ -98,7 +103,7 @@ resources:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/03_extract_oracle_credit_scores
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - task_key: extract_accounts
+            - extract_accounts
           timeout_seconds: 1800
 
         - task_key: extract_tickets
@@ -106,7 +111,7 @@ resources:
             notebook_path: ${bundle.root_path}/src/notebooks/bronze/04_extract_oracle_tickets
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - task_key: extract_accounts
+            - extract_accounts
           timeout_seconds: 1800
 
         - task_key: transform_silver
@@ -114,10 +119,10 @@ resources:
             notebook_path: ${bundle.root_path}/src/notebooks/silver/01_transform_accounts
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - task_key: extract_accounts
-            - task_key: extract_transactions
-            - task_key: extract_credit_scores
-            - task_key: extract_tickets
+            - extract_accounts
+            - extract_transactions
+            - extract_credit_scores
+            - extract_tickets
           timeout_seconds: 1800
 
         - task_key: build_gold
@@ -125,15 +130,15 @@ resources:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/01_build_dim_customer
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - task_key: transform_silver
+            - transform_silver
           timeout_seconds: 1800
 
-        - task_key: dq_validation
+        - task_key: build_fraud_alerts
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/08_build_fraud_alert_table
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - task_key: build_gold
+            - build_gold
           timeout_seconds: 1800
 
   fraud_detection_job:
@@ -143,6 +148,8 @@ resources:
       description: Continuous Kafka consumer for fraud scoring
       deployment:
         kind: COMPLETE
+      trigger:
+        pause_status: UNPAUSED
       tasks:
         - task_key: fraud_streaming
           spark_python_task:
@@ -150,7 +157,8 @@ resources:
           cluster_id: ${resources.streaming_cluster.cluster_id}
           timeout_seconds: 86400  # 24 hours
 
-# Permissions & ACLs (Unity Catalog)
+# Permissions & ACLs (Workspace-level scope)
+# These permissions apply at the workspace level to all bundle resources
 permissions:
   - level: CAN_MANAGE
     group_name: data-engineering-team
