@@ -43,7 +43,7 @@ resources:
       num_workers: 2
       aws_attributes:
         availability: SPOT
-        zone_id: us-east-1a
+        zone_id: ap-southeast-1a
       spark_conf:
         spark.sql.adaptive.enabled: "true"
         spark.sql.adaptive.coalescePartitions.enabled: "true"
@@ -59,7 +59,7 @@ resources:
       num_workers: 2
       aws_attributes:
         availability: ON_DEMAND
-        zone_id: us-east-1a
+        zone_id: ap-southeast-1a
       autoscale:
         min_workers: 2
         max_workers: 4
@@ -114,31 +114,83 @@ resources:
             - extract_accounts
           timeout_seconds: 1800
 
-        - task_key: transform_silver
+        - task_key: transform_accounts
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/silver/01_transform_accounts
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
             - extract_accounts
-            - extract_transactions
-            - extract_credit_scores
-            - extract_tickets
           timeout_seconds: 1800
 
-        - task_key: build_gold
+        - task_key: transform_transactions
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/silver/02_transform_transactions
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - extract_transactions
+            - transform_accounts
+          timeout_seconds: 1800
+
+        - task_key: build_dim_customer
           notebook_task:
             notebook_path: ${bundle.root_path}/src/notebooks/gold/01_build_dim_customer
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - transform_silver
+            - transform_accounts
           timeout_seconds: 1800
 
-        - task_key: build_fraud_alerts
+        - task_key: build_dim_account
           notebook_task:
-            notebook_path: ${bundle.root_path}/src/notebooks/gold/08_build_fraud_alert_table
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/02_build_dim_account
           cluster_id: ${resources.batch_cluster.cluster_id}
           depends_on:
-            - build_gold
+            - transform_accounts
+          timeout_seconds: 1800
+
+        - task_key: build_dim_date
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/03_build_dim_date
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - transform_transactions
+          timeout_seconds: 1800
+
+        - task_key: build_dim_event_type
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/04_build_dim_event_type
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - transform_transactions
+          timeout_seconds: 1800
+
+        - task_key: build_fact_transactions
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/05_build_fact_transactions
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - build_dim_customer
+            - build_dim_account
+            - build_dim_date
+            - transform_transactions
+          timeout_seconds: 1800
+
+        - task_key: build_fact_mobile_events
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/06_build_fact_mobile_events
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - build_dim_customer
+            - build_dim_event_type
+            - build_dim_date
+          timeout_seconds: 1800
+
+        - task_key: build_fact_fraud_risk
+          notebook_task:
+            notebook_path: ${bundle.root_path}/src/notebooks/gold/07_build_fact_fraud_risk
+          cluster_id: ${resources.batch_cluster.cluster_id}
+          depends_on:
+            - build_fact_transactions
+            - build_dim_customer
           timeout_seconds: 1800
 
   fraud_detection_job:
