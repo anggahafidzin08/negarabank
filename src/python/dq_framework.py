@@ -21,6 +21,7 @@ class DataQualityCheck:
             "name": self.name,
             "description": self.description,
             "table": self.table,
+            "sql_query": self.sql_query,
             "passed": self.passed,
             "record_count": self.record_count,
             "timestamp": self.timestamp,
