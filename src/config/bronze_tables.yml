@@ -19,12 +19,12 @@ tables:
     bronze_table: transactions
     method: delta_load
     write_mode: append
-    date_column: txn_date
-    lookback_days: 30
+    timestamp_column: txn_date    # JDBC predicate column + checkpoint source
     predicate_slices: 4
+    checkpoint_buffer_hours: 12   # re-read last_checkpoint - 12h to catch late arrivals
 
-  - name: CREDIT_SCORES
-    bronze_table: credit_scores
+  - name: CUSTOMERS
+    bronze_table: customers
     method: full_snapshot
     write_mode: overwrite
 
