@@ -17,8 +17,8 @@ resources:
       job_clusters:
         - job_cluster_key: batch_cluster
           new_cluster:
-            spark_version: 13.3.x-scala2.12
-            node_type_id: i3en.3xlarge
+            spark_version: 16.4.x-scala2.12
+            node_type_id: r6i.large
             num_workers: 2
             aws_attributes:
               availability: SPOT
