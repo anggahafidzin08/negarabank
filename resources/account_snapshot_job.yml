@@ -10,9 +10,13 @@ resources:
             spark_version: 16.4.x-scala2.12
             node_type_id: r6i.large
             num_workers: 2
+            enable_elastic_disk: true
             aws_attributes:
-              availability: SPOT
+              availability: SPOT_WITH_FALLBACK
               zone_id: ap-southeast-1a
+              ebs_volume_count: 1
+              ebs_volume_size: 100
+              ebs_volume_type: GENERAL_PURPOSE_SSD
             spark_conf:
               spark.sql.adaptive.enabled: "true"
               spark.sql.adaptive.coalescePartitions.enabled: "true"
