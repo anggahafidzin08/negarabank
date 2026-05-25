@@ -11,21 +11,29 @@ resources:
         quartz_cron_expression: "0 0 2 * * ?"
         timezone_id: Asia/Jakarta
         pause_status: PAUSED  # Start in paused state to avoid unintended runs during setup
-
+      email_notifications:
+        on_failure: ${var.etl_job_owner_email}
+        
       job_clusters:
         - job_cluster_key: batch_cluster
           new_cluster:
-            spark_version: 13.3.x-scala2.12
-            node_type_id: i3en.3xlarge
-            num_workers: 2
+            spark_version: 16.4.x-scala2.12
+            node_type_id: r6i.large
+            autoscale:
+              min_workers: 2
+              max_workers: 4
             aws_attributes:
-              availability: SPOT
+              availability: SPOT_WITH_FALLBACK
               zone_id: ap-southeast-1a
+              ebs_volume_count: 1
+              ebs_volume_size: 200
+              ebs_volume_type: GENERAL_PURPOSE_SSD
             spark_conf:
               spark.sql.adaptive.enabled: "true"
               spark.sql.adaptive.coalescePartitions.enabled: "true"
               spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
               spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+              spark.sql.adativeQueryExecution: "true"
 
       tasks:
         # ===== BRONZE LAYER: Extract (single script, table driven by --table arg) =====
@@ -36,6 +44,15 @@ resources:
             parameters:
               - "--table"
               - "ACCOUNTS"
+          timeout_seconds: 1800
+
+        - task_key: extract_customers
+          job_cluster_key: batch_cluster
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/python/bronze_extractor.py
+            parameters:
+              - "--table"
+              - "CUSTOMERS"
           timeout_seconds: 1800
 
         - task_key: extract_transactions
@@ -77,6 +94,17 @@ resources:
             - task_key: extract_accounts
           timeout_seconds: 1800
 
+        - task_key: transform_customers
+          job_cluster_key: batch_cluster
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/python/silver_transformer.py
+            parameters:
+              - "--table"
+              - "customers"
+          depends_on:
+            - task_key: extract_customers
+          timeout_seconds: 1800
+
         - task_key: transform_transactions
           job_cluster_key: batch_cluster
           spark_python_task:
@@ -96,7 +124,7 @@ resources:
             python_file: ${workspace.file_path}/src/python/gold_builder.py
             parameters: ["--table", "dim_customer"]
           depends_on:
-            - task_key: transform_accounts
+            - task_key: transform_customers
           timeout_seconds: 1800
 
         - task_key: build_dim_account

@@ -5,7 +5,7 @@ from typing import Dict, Any
 
 def get_oracle_credentials() -> Dict[str, str]:
     """Retrieve Oracle credentials from AWS Secrets Manager."""
-    client = boto3.client("secretsmanager", region_name=os.getenv("AWS_REGION", "us-east-1"))
+    client = boto3.client("secretsmanager", region_name=os.getenv("AWS_REGION", "ap-southeast-1"))
 
     try:
         response = client.get_secret_value(SecretId="negarabank/oracle/jdbc")

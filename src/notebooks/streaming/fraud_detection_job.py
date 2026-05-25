@@ -8,7 +8,7 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.types import StructType, StructField, StringType, LongType, DoubleType, TimestampType
 from pyspark.sql.window import Window
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.python.config import Paths, get_kafka_config
 import logging
 
@@ -29,9 +29,9 @@ mobile_event_schema = StructType([
     StructField("customer_id", LongType(), False),
     StructField("event_type", StringType(), True),
     StructField("timestamp", TimestampType(), False),
-    StructField("device_id", StringType(), True),
-    StructField("location", StringType(), True),
-    StructField("amount", DoubleType(), True),
+    StructField("device_type", StringType(), True),
+    StructField("session_id", StringType(), True),
+    StructField("app_version", StringType(), True)
 ])
 
 # COMMAND ----------
@@ -59,9 +59,9 @@ events_df = kafka_stream.select(
     col("data.customer_id"),
     col("data.event_type"),
     col("data.timestamp").alias("event_timestamp"),
-    col("data.device_id"),
-    col("data.location"),
-    col("data.amount"),
+    col("data.device_type"),
+    col("data.session_id"),
+    col("data.app_version"),
     col("kafka_timestamp"),
 )
 
@@ -78,8 +78,16 @@ deduped_events = events_df.withColumn("rn", row_number().over(window_spec)) \
 # COMMAND ----------
 
 # Broadcast join with account master (latest 7-day snapshot from Silver)
-accounts_silver = spark.read.format("delta").load(Paths.silver_table("accounts"))
-accounts_broadcast = broadcast(accounts_silver.select("customer_id", "account_id", "balance"))
+accounts_snapshot = spark.read.format("delta").load(Paths.gold_table("account_daily_snapshot"))\
+    .filter(col("snapshot_date") >= lit((datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")))
+accounts_snapshot = accounts_snapshot.join(
+    spark.read.format("delta").load(Paths.gold_table("customer_health_scorecard"))\
+        .select("customer_id", "prev_month_balance")\
+        .filter(col("report_month") >= lit((datetime.now().replace(day=1)).strftime("%Y-%m-%d"))),
+    on="customer_id",
+    how="left"
+)
+accounts_broadcast = broadcast(accounts_snapshot.select("customer_id", "account_id", "total_debit_amount", "prev_month_balance"))
 
 events_with_account = deduped_events.join(
     accounts_broadcast,
@@ -131,7 +139,7 @@ fraud_score_fn = udf(fraud_score_udf, DoubleType())
 
 events_with_score = events_with_features.withColumn(
     "fraud_score",
-    fraud_score_fn(col("event_count_24h"), col("avg_transaction_amount"), col("balance"))
+    fraud_score_fn(col("event_count_24h"), col("avg_transaction_amount"), col("prev_month_balance"))
 )
 
 # COMMAND ----------

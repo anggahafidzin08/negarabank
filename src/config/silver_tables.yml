@@ -26,6 +26,42 @@ tables:
       not_null: [account_id, customer_id]
       unique: [account_id]
 
+  - name: customers
+    source_table: negarabank.bronze.customers
+    target_table: negarabank.silver.customers
+    business_key: customer_id
+    scd2:
+      tracked_columns:
+        - phone
+        - email
+        - city
+        - province
+        - kyc_status
+        - risk_score
+        - segment
+      effective_date_column: load_date
+    transform_sql: |
+      SELECT
+      customer_id,full_name,nik,phone,email,city,province,registration_date,kyc_status,risk_score,segment
+        CAST(customer_id  AS BIGINT)         AS customer_id,
+        CAST(full_name    AS STRING)         AS full_name,
+        CAST(nik          AS STRING)         AS nik,
+        CAST(phone        AS STRING)         AS phone,
+        CAST(email        AS STRING)         AS email,
+        CAST(city         AS STRING)         AS city,
+        CAST(province     AS STRING)         AS province,
+        CAST(registration_date AS TIMESTAMP) AS registration_date,
+        CAST(kyc_status   AS STRING)         AS kyc_status,
+        CAST(risk_score   AS DECIMAL(15, 2))  AS risk_score,
+        CAST(segment      AS STRING)         AS segment,
+        load_date,
+        load_timestamp
+      FROM negarabank.bronze.customers
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY load_timestamp DESC) = 1
+    dq:
+      not_null: [customer_id]
+      unique: [customer_id]
+
   - name: transactions
     source_table: negarabank.bronze.transactions
     target_table: negarabank.silver.transactions

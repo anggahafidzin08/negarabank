@@ -161,12 +161,48 @@ class BronzeExtractor:
         for cfg in self.config["tables"]:
             self._dispatch(cfg)
 
+    def _extract_partitioned_load(self, cfg: dict) -> None:
+        name = cfg["name"]
+        bronze_table = cfg["bronze_table"]
+        partition_column = cfg["partition_column"]
+        num_partitions = cfg.get("num_partitions", 8)
+
+        # Derive bounds from Oracle if not specified — avoids hardcoding in YAML
+        if "lower_bound" in cfg and "upper_bound" in cfg:
+            lower_bound = str(cfg["lower_bound"])
+            upper_bound = str(cfg["upper_bound"])
+        else:
+            bounds_df = self.extractor.extract_full_table(
+                f"(SELECT MIN({partition_column}) AS lb, MAX({partition_column}) AS ub FROM {name})"
+            )
+            row = bounds_df.collect()[0]
+            lower_bound = str(row["lb"])
+            upper_bound = str(row["ub"])
+
+        df = self.extractor.extract_incremental(
+            table_name=name,
+            partition_column=partition_column,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            num_partitions=num_partitions,
+        )
+        load_ts = datetime.now()
+        df = self._add_metadata(df, load_ts)
+        count = df.count()
+        write_mode = cfg.get("write_mode", "overwrite")
+        df.write.format("delta").mode(write_mode).partitionBy("load_date").save(
+            Paths.bronze_table(bronze_table)
+        )
+        logger.info(f"[{name}] {count} rows written ({write_mode}, {num_partitions} partitions)")
+
     def _dispatch(self, cfg: dict) -> None:
         method = cfg["method"]
         if method == "full_snapshot":
             self._extract_full_snapshot(cfg)
         elif method == "delta_load":
             self._extract_delta_load(cfg)
+        elif method == "partitioned_load":
+            self._extract_partitioned_load(cfg)
         else:
             raise ValueError(f"unknown method '{method}' for {cfg['name']}")
 
