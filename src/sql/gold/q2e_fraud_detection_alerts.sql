@@ -1,19 +1,9 @@
--- =============================================================================
--- Q2e: Fraud Detection Alert Patterns
--- incremental_merge — watermark ${watermark_ts} scopes new Silver rows
--- Grain: one row per (customer_id, alert_type, alert_date)
--- Two alert types:
---   VELOCITY_SPIKE — 5+ transactions within any single clock hour
---   AMOUNT_SPIKE   — single transaction > 3× the customer's own 30-day average
+-- Q2e: Fraud detection alerts, one row per (customer_id, alert_type, alert_date)
+-- Two alert types: VELOCITY_SPIKE (5+ txns in one hour), AMOUNT_SPIKE (>3x 30-day avg)
+-- GEO_ANOMALY excluded — no location data in Silver transactions schema
 --
--- Note: GEO_ANOMALY excluded — no location data in Silver transactions schema.
---
--- Incremental scope:
---   affected_customers — customer_ids with new Silver rows since watermark
---   affected_txns      — ALL 90-day transactions for those customers, so:
---     • VELOCITY_SPIKE bucket COUNTs include all txns in the hour, not just new
---     • AMOUNT_SPIKE 30d AVG baseline has prior-day rows via RANGE BETWEEN
--- =============================================================================
+-- Incremental: find customers with new Silver rows, then pull their full 90-day
+-- transaction history so bucket counts and 30-day avg baselines are correct
 WITH
 
 affected_customers AS (
@@ -25,12 +15,7 @@ affected_customers AS (
 ),
 
 affected_txns AS (
-  SELECT
-    customer_id,
-    transaction_id,
-    amount,
-    txn_date,
-    status
+  SELECT customer_id, transaction_id, amount, txn_date, status
   FROM negarabank.silver.transactions
   WHERE is_current   = true
     AND customer_id  IN (SELECT customer_id FROM affected_customers)
@@ -41,41 +26,42 @@ affected_txns AS (
 velocity_alerts AS (
   SELECT
     customer_id,
-    DATE_TRUNC('hour', txn_date)         AS window_start,
-    CAST(DATE(txn_date) AS DATE)         AS alert_date,
-    COUNT(*)                             AS txn_count,
-    ROUND(SUM(amount), 2)                AS window_total_amount,
-    ROUND(MIN(amount), 2)                AS min_amount,
-    ROUND(MAX(amount), 2)                AS max_amount
+    DATE_TRUNC('hour', txn_date)       AS window_start,
+    CAST(DATE(txn_date) AS DATE)       AS alert_date,
+    COUNT(*)                           AS txn_count,
+    ROUND(SUM(amount), 2)              AS window_total_amount,
+    ROUND(MIN(amount), 2)              AS min_amount,
+    ROUND(MAX(amount), 2)              AS max_amount
   FROM affected_txns
   GROUP BY customer_id, DATE_TRUNC('hour', txn_date), CAST(DATE(txn_date) AS DATE)
   HAVING COUNT(*) >= 5
 ),
 
+-- 30-day rolling avg excludes same-day transactions to avoid self-inflation
 customer_30d_avg AS (
   SELECT
     customer_id,
-    CAST(DATE(txn_date) AS DATE)         AS txn_day,
+    CAST(DATE(txn_date) AS DATE)  AS txn_day,
     AVG(amount) OVER (
       PARTITION BY customer_id
       ORDER BY CAST(DATE(txn_date) AS DATE)
       RANGE BETWEEN 30 PRECEDING AND 1 PRECEDING
-    )                                    AS avg_30d_amount
+    ) AS avg_30d_amount
   FROM affected_txns
 ),
 
 amount_spike_raw AS (
   SELECT
     t.customer_id,
-    CAST(DATE(t.txn_date) AS DATE)       AS alert_date,
+    CAST(DATE(t.txn_date) AS DATE)              AS alert_date,
     t.amount,
     ca.avg_30d_amount,
-    t.amount / NULLIF(ca.avg_30d_amount, 0) AS spike_ratio
+    t.amount / NULLIF(ca.avg_30d_amount, 0)     AS spike_ratio
   FROM affected_txns t
   JOIN customer_30d_avg ca
-    ON  t.customer_id                    = ca.customer_id
-    AND CAST(DATE(t.txn_date) AS DATE)   = ca.txn_day
-  WHERE t.amount      > ca.avg_30d_amount * 3
+    ON  t.customer_id                  = ca.customer_id
+    AND CAST(DATE(t.txn_date) AS DATE) = ca.txn_day
+  WHERE t.amount > ca.avg_30d_amount * 3
     AND ca.avg_30d_amount IS NOT NULL
 ),
 
@@ -83,10 +69,10 @@ amount_alerts AS (
   SELECT
     customer_id,
     alert_date,
-    COUNT(*)                             AS spike_txn_count,
-    ROUND(MAX(amount), 2)                AS max_spike_amount,
-    ROUND(MAX(spike_ratio), 2)           AS max_spike_ratio,
-    ROUND(AVG(avg_30d_amount), 2)        AS baseline_avg_amount
+    COUNT(*)                      AS spike_txn_count,
+    ROUND(MAX(amount), 2)         AS max_spike_amount,
+    ROUND(MAX(spike_ratio), 2)    AS max_spike_ratio,
+    ROUND(AVG(avg_30d_amount), 2) AS baseline_avg_amount
   FROM amount_spike_raw
   GROUP BY customer_id, alert_date
 )
@@ -94,32 +80,28 @@ amount_alerts AS (
 MERGE INTO negarabank.gold.fraud_detection_alerts AS target
 USING (
   SELECT
-    customer_id,
-    'VELOCITY_SPIKE'                     AS alert_type,
-    alert_date,
+    customer_id, 'VELOCITY_SPIKE' AS alert_type, alert_date,
     TO_JSON(NAMED_STRUCT(
-      'window_start',        CAST(window_start AS STRING),
-      'txn_count',           txn_count,
+      'window_start', CAST(window_start AS STRING),
+      'txn_count', txn_count,
       'window_total_amount', window_total_amount,
-      'min_amount',          min_amount,
-      'max_amount',          max_amount
-    ))                                   AS details_json,
-    CURRENT_TIMESTAMP()                  AS computed_at
+      'min_amount', min_amount,
+      'max_amount', max_amount
+    )) AS details_json,
+    CURRENT_TIMESTAMP() AS computed_at
   FROM velocity_alerts
 
   UNION ALL
 
   SELECT
-    customer_id,
-    'AMOUNT_SPIKE'                       AS alert_type,
-    alert_date,
+    customer_id, 'AMOUNT_SPIKE' AS alert_type, alert_date,
     TO_JSON(NAMED_STRUCT(
-      'spike_txn_count',     spike_txn_count,
-      'max_spike_amount',    max_spike_amount,
-      'max_spike_ratio',     max_spike_ratio,
+      'spike_txn_count', spike_txn_count,
+      'max_spike_amount', max_spike_amount,
+      'max_spike_ratio', max_spike_ratio,
       'baseline_avg_amount', baseline_avg_amount
-    ))                                   AS details_json,
-    CURRENT_TIMESTAMP()                  AS computed_at
+    )) AS details_json,
+    CURRENT_TIMESTAMP() AS computed_at
   FROM amount_alerts
 ) AS source
 ON  target.customer_id = source.customer_id

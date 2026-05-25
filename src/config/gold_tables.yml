@@ -1,30 +1,4 @@
-# Gold layer table configuration
-# Each table declares its SQL file, refresh method, and schema.
-#
-# method: full_refresh
-#   SQL file is a single CREATE OR REPLACE TABLE ... AS SELECT statement.
-#   Used for dimension tables derived from a current Silver snapshot.
-#   Idempotent — safe to re-run on every pipeline execution.
-#
-# method: incremental_merge
-#   Python resolves MAX(computed_at) from the target table as the watermark.
-#   Substitutes ${watermark_ts} in the SQL string, then executes a single
-#   WITH ... MERGE INTO statement.
-#   On first run (table absent) watermark falls back to epoch → full backfill
-#   through the same code path — no special-case logic.
-#
-# columns:
-#   Required for incremental_merge tables.
-#   Python uses these to CREATE TABLE IF NOT EXISTS before the first MERGE.
-#
-# optimize_zorder:
-#   Columns passed to OPTIMIZE ... ZORDER BY after each successful run.
-#   Empty list → OPTIMIZE without ZORDER (compaction only).
-
 tables:
-
-  # ── Dimension tables (full_refresh, small snapshot from Silver) ─────────────
-
   - name: dim_customer
     target_table: negarabank.gold.dim_customer
     sql_file: gold/dim_customer.sql
@@ -43,8 +17,6 @@ tables:
     method: full_refresh
     optimize_zorder: []
 
-  # ── Fact tables (incremental_merge, watermark from computed_at) ─────────────
-
   - name: fact_transactions
     target_table: negarabank.gold.fact_transactions
     sql_file: gold/fact_transactions.sql
@@ -53,14 +25,14 @@ tables:
     partition_by: txn_date
     optimize_zorder: [customer_id, txn_date]
     columns:
-      - {name: transaction_id,  type: BIGINT}
-      - {name: customer_id,     type: BIGINT}
-      - {name: account_id,      type: BIGINT}
-      - {name: amount,          type: DECIMAL(15,2)}
-      - {name: txn_date,        type: DATE}
-      - {name: status,          type: STRING}
-      - {name: reconciled,      type: STRING}
-      - {name: computed_at,     type: TIMESTAMP}
+      - {name: transaction_id, type: BIGINT}
+      - {name: customer_id,    type: BIGINT}
+      - {name: account_id,     type: BIGINT}
+      - {name: amount,         type: DECIMAL(15,2)}
+      - {name: txn_date,       type: DATE}
+      - {name: status,         type: STRING}
+      - {name: reconciled,     type: STRING}
+      - {name: computed_at,    type: TIMESTAMP}
 
   - name: fact_fraud_risk
     target_table: negarabank.gold.fact_fraud_risk
@@ -79,8 +51,6 @@ tables:
       - {name: daily_failed_count,     type: BIGINT}
       - {name: risk_level,             type: STRING}
       - {name: computed_at,            type: TIMESTAMP}
-
-  # ── OJK regulatory reports (incremental_merge, Q2d / Q2e) ───────────────────
 
   - name: customer_health_scorecard
     target_table: negarabank.gold.customer_health_scorecard

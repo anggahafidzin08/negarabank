@@ -1,14 +1,3 @@
-# Bronze layer table extraction configuration
-# Each table declares its own loading strategy — no Python changes needed to add a new table.
-#
-# method:
-#   full_snapshot  — overwrite entire table each run (small/static tables)
-#   delta_load     — append only new rows since last load (large/high-velocity tables)
-#
-# predicate_slices (delta_load only):
-#   Splits the day into N parallel JDBC connections by time window.
-#   4 slices = 4 x 6-hour windows. Increase for very large tables.
-
 tables:
   - name: ACCOUNTS
     bronze_table: accounts
@@ -19,9 +8,9 @@ tables:
     bronze_table: transactions
     method: delta_load
     write_mode: append
-    timestamp_column: txn_date    # JDBC predicate column + checkpoint source
+    timestamp_column: txn_date
     predicate_slices: 4
-    checkpoint_buffer_hours: 12   # re-read last_checkpoint - 12h to catch late arrivals
+    checkpoint_buffer_hours: 12  # re-reads last checkpoint - 12h to catch late arrivals
 
   - name: CUSTOMERS
     bronze_table: customers
