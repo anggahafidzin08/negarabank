@@ -27,8 +27,8 @@ include:
   - resources/*.yml
 
 # Resources are imported from separate files in the resources/ directory
-# - resources/clusters.yml: Batch and streaming cluster definitions
-# - resources/batch_etl_job.yml: Daily batch ETL pipeline (Bronze → Silver → Gold)
+# - resources/batch_etl_job.yml: Daily batch ETL pipeline (Bronze → Silver → Gold), runs 2 AM UTC
+# - resources/account_snapshot_job.yml: Account daily snapshot + credit scoring, runs 5 AM UTC
 # - resources/fraud_detection_job.yml: 24/7 fraud detection streaming job
 
 # Permissions & ACLs (Workspace-level scope)

@@ -80,6 +80,33 @@ tables:
       - {name: risk_flag,              type: BOOLEAN}
       - {name: computed_at,            type: TIMESTAMP}
 
+  - name: account_daily_snapshot
+    target_table: negarabank.gold.account_daily_snapshot
+    sql_file: gold/account_daily_snapshot.sql
+    method: incremental_merge
+    merge_keys: [account_id, snapshot_date]
+    partition_by: snapshot_date
+    optimize_zorder: [account_id, snapshot_date]
+    columns:
+      - {name: account_id,            type: BIGINT}
+      - {name: customer_id,           type: BIGINT}
+      - {name: account_type,          type: STRING}
+      - {name: account_status,        type: STRING}
+      - {name: credit_limit,          type: DECIMAL(15,2)}
+      - {name: snapshot_date,         type: DATE}
+      - {name: txn_count,             type: BIGINT}
+      - {name: debit_count,           type: BIGINT}
+      - {name: credit_count,          type: BIGINT}
+      - {name: failed_count,          type: BIGINT}
+      - {name: total_debit_amount,    type: DECIMAL(15,2)}
+      - {name: total_credit_amount,   type: DECIMAL(15,2)}
+      - {name: total_amount,          type: DECIMAL(15,2)}
+      - {name: avg_txn_amount,        type: DECIMAL(15,2)}
+      - {name: max_txn_amount,        type: DECIMAL(15,2)}
+      - {name: net_flow,              type: DECIMAL(15,2)}
+      - {name: daily_utilization_pct, type: DECIMAL(10,2)}
+      - {name: computed_at,           type: TIMESTAMP}
+
   - name: fraud_detection_alerts
     target_table: negarabank.gold.fraud_detection_alerts
     sql_file: gold/q2e_fraud_detection_alerts.sql
