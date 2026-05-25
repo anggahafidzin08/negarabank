@@ -66,11 +66,14 @@ resources:
               - "SUPPORT_TICKETS"
           timeout_seconds: 1800
 
-        # ===== SILVER LAYER: Transform & Curate =====
+        # ===== SILVER LAYER: Transform & Curate (SCD2) =====
         - task_key: transform_accounts
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/silver/01_transform_accounts
+            python_file: ${workspace.file_path}/src/python/silver_transformer.py
+            parameters:
+              - "--table"
+              - "accounts"
           depends_on:
             - task_key: extract_accounts
           timeout_seconds: 1800
@@ -78,7 +81,10 @@ resources:
         - task_key: transform_transactions
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/silver/02_transform_transactions
+            python_file: ${workspace.file_path}/src/python/silver_transformer.py
+            parameters:
+              - "--table"
+              - "transactions"
           depends_on:
             - task_key: extract_transactions
             - task_key: transform_accounts

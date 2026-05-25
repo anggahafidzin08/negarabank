@@ -1,0 +1,86 @@
+# Silver layer transformation configuration
+# Each table declares its own SQL transformation and SCD2 strategy.
+#
+# transform_sql:
+#   Full Spark SQL executed against Unity Catalog tables.
+#   Handles deduplication via QUALIFY ROW_NUMBER(), type casting, and joins.
+#   Runs as spark.sql(transform_sql) so all catalog tables are accessible.
+#
+# scd2.tracked_columns:
+#   Columns whose changes trigger a new SCD2 version.
+#   A record_hash (MD5) is computed over these columns for efficient diff.
+#
+# dq:
+#   not_null  — list of columns that must have zero nulls
+#   unique    — list of columns that must be unique in the incoming batch
+
+tables:
+  - name: accounts
+    source_table: negarabank.bronze.accounts
+    target_table: negarabank.silver.accounts
+    business_key: account_id
+    scd2:
+      tracked_columns:
+        - account_type
+        - balance
+        - status
+      effective_date_column: load_date
+    transform_sql: |
+      SELECT
+        CAST(account_id   AS BIGINT)          AS account_id,
+        CAST(customer_id  AS BIGINT)          AS customer_id,
+        UPPER(TRIM(account_type))             AS account_type,
+        CAST(balance      AS DECIMAL(15, 2))  AS balance,
+        UPPER(TRIM(status))                   AS status,
+        CAST(open_date    AS TIMESTAMP)       AS open_date,
+        CAST('true'       AS STRING)          AS dq_passed,
+        load_date,
+        load_timestamp
+      FROM negarabank.bronze.accounts
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY account_id
+        ORDER BY load_timestamp DESC
+      ) = 1
+    dq:
+      not_null:
+        - account_id
+        - customer_id
+      unique:
+        - account_id
+
+  - name: transactions
+    source_table: negarabank.bronze.transactions
+    target_table: negarabank.silver.transactions
+    business_key: transaction_id
+    scd2:
+      tracked_columns:
+        - status
+      effective_date_column: load_date
+    transform_sql: |
+      SELECT
+        CAST(t.transaction_id AS BIGINT)          AS transaction_id,
+        CAST(t.account_id     AS BIGINT)          AS account_id,
+        CAST(t.customer_id    AS BIGINT)          AS customer_id,
+        CAST(t.amount         AS DECIMAL(15, 2))  AS amount,
+        CAST(t.txn_date       AS TIMESTAMP)       AS txn_date,
+        UPPER(TRIM(t.status))                     AS status,
+        CASE
+          WHEN a.account_id IS NOT NULL THEN 'true'
+          ELSE 'false'
+        END                                        AS reconciled,
+        t.load_date,
+        t.load_timestamp
+      FROM negarabank.bronze.transactions t
+      LEFT JOIN negarabank.silver.accounts a
+        ON  t.account_id = a.account_id
+        AND a.is_current = true
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY t.transaction_id
+        ORDER BY t.load_timestamp DESC
+      ) = 1
+    dq:
+      not_null:
+        - transaction_id
+        - account_id
+      unique:
+        - transaction_id
