@@ -1,0 +1,39 @@
+name: Deploy to Databricks
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+jobs:
+  deploy:
+    name: Deploy (${{ github.event.inputs.target || 'dev' }})
+    runs-on: ubuntu-latest
+
+    env:
+      TARGET: ${{ github.event.inputs.target || 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Databricks CLI
+        run: pip install databricks-cli
+
+      - name: Deploy bundle
+        env:
+          DATABRICKS_HOST: ${{ env.TARGET == 'prod' && secrets.DATABRICKS_HOST_PROD || secrets.DATABRICKS_HOST_DEV }}
+          DATABRICKS_TOKEN: ${{ env.TARGET == 'prod' && secrets.DATABRICKS_TOKEN_PROD || secrets.DATABRICKS_TOKEN_DEV }}
+        run: databricks bundle deploy --target $TARGET
