@@ -90,11 +90,12 @@ resources:
             - task_key: transform_accounts
           timeout_seconds: 1800
 
-        # ===== GOLD LAYER: Dimensions =====
+        # ===== GOLD LAYER: Dimensions (full_refresh, parallel after Silver) =====
         - task_key: build_dim_customer
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/01_build_dim_customer
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "dim_customer"]
           depends_on:
             - task_key: transform_accounts
           timeout_seconds: 1800
@@ -102,7 +103,8 @@ resources:
         - task_key: build_dim_account
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/02_build_dim_account
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "dim_account"]
           depends_on:
             - task_key: transform_accounts
           timeout_seconds: 1800
@@ -110,55 +112,40 @@ resources:
         - task_key: build_dim_date
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/03_build_dim_date
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "dim_date"]
           depends_on:
             - task_key: transform_transactions
-          timeout_seconds: 1800
+          timeout_seconds: 900
 
-        - task_key: build_dim_event_type
-          job_cluster_key: batch_cluster
-          spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/04_build_dim_event_type
-          depends_on:
-            - task_key: transform_transactions
-          timeout_seconds: 1800
-
-        # ===== GOLD LAYER: Facts =====
+        # ===== GOLD LAYER: Facts (incremental_merge) =====
         - task_key: build_fact_transactions
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/05_build_fact_transactions
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "fact_transactions"]
           depends_on:
             - task_key: build_dim_customer
             - task_key: build_dim_account
             - task_key: build_dim_date
             - task_key: transform_transactions
-          timeout_seconds: 1800
-
-        - task_key: build_fact_mobile_events
-          job_cluster_key: batch_cluster
-          spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/06_build_fact_mobile_events
-          depends_on:
-            - task_key: build_dim_customer
-            - task_key: build_dim_event_type
-            - task_key: build_dim_date
-          timeout_seconds: 1800
+          timeout_seconds: 3600
 
         - task_key: build_fact_fraud_risk
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/07_build_fact_fraud_risk
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "fact_fraud_risk"]
           depends_on:
             - task_key: build_fact_transactions
-            - task_key: build_dim_customer
           timeout_seconds: 1800
 
-        # ===== GOLD LAYER: OJK Regulatory Reports (Q2d / Q2e) =====
+        # ===== GOLD LAYER: OJK Regulatory Reports (incremental_merge) =====
         - task_key: build_customer_health_scorecard
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/08_build_customer_health_scorecard.py
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "customer_health_scorecard"]
           depends_on:
             - task_key: transform_accounts
             - task_key: transform_transactions
@@ -167,7 +154,8 @@ resources:
         - task_key: build_fraud_detection_alerts
           job_cluster_key: batch_cluster
           spark_python_task:
-            python_file: ${workspace.file_path}/src/notebooks/gold/09_build_fraud_detection_alerts.py
+            python_file: ${workspace.file_path}/src/python/gold_builder.py
+            parameters: ["--table", "fraud_detection_alerts"]
           depends_on:
             - task_key: transform_transactions
             - task_key: transform_accounts

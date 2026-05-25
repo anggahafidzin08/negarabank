@@ -1,0 +1,125 @@
+# Gold layer table configuration
+# Each table declares its SQL file, refresh method, and schema.
+#
+# method: full_refresh
+#   SQL file is a single CREATE OR REPLACE TABLE ... AS SELECT statement.
+#   Used for dimension tables derived from a current Silver snapshot.
+#   Idempotent — safe to re-run on every pipeline execution.
+#
+# method: incremental_merge
+#   Python resolves MAX(computed_at) from the target table as the watermark.
+#   Substitutes ${watermark_ts} in the SQL string, then executes a single
+#   WITH ... MERGE INTO statement.
+#   On first run (table absent) watermark falls back to epoch → full backfill
+#   through the same code path — no special-case logic.
+#
+# columns:
+#   Required for incremental_merge tables.
+#   Python uses these to CREATE TABLE IF NOT EXISTS before the first MERGE.
+#
+# optimize_zorder:
+#   Columns passed to OPTIMIZE ... ZORDER BY after each successful run.
+#   Empty list → OPTIMIZE without ZORDER (compaction only).
+
+tables:
+
+  # ── Dimension tables (full_refresh, small snapshot from Silver) ─────────────
+
+  - name: dim_customer
+    target_table: negarabank.gold.dim_customer
+    sql_file: gold/dim_customer.sql
+    method: full_refresh
+    optimize_zorder: [customer_id]
+
+  - name: dim_account
+    target_table: negarabank.gold.dim_account
+    sql_file: gold/dim_account.sql
+    method: full_refresh
+    optimize_zorder: [account_id, customer_id]
+
+  - name: dim_date
+    target_table: negarabank.gold.dim_date
+    sql_file: gold/dim_date.sql
+    method: full_refresh
+    optimize_zorder: []
+
+  # ── Fact tables (incremental_merge, watermark from computed_at) ─────────────
+
+  - name: fact_transactions
+    target_table: negarabank.gold.fact_transactions
+    sql_file: gold/fact_transactions.sql
+    method: incremental_merge
+    merge_keys: [transaction_id]
+    partition_by: txn_date
+    optimize_zorder: [customer_id, txn_date]
+    columns:
+      - {name: transaction_id,  type: BIGINT}
+      - {name: customer_id,     type: BIGINT}
+      - {name: account_id,      type: BIGINT}
+      - {name: amount,          type: DECIMAL(15,2)}
+      - {name: txn_date,        type: DATE}
+      - {name: status,          type: STRING}
+      - {name: reconciled,      type: STRING}
+      - {name: computed_at,     type: TIMESTAMP}
+
+  - name: fact_fraud_risk
+    target_table: negarabank.gold.fact_fraud_risk
+    sql_file: gold/fact_fraud_risk.sql
+    method: incremental_merge
+    merge_keys: [customer_id, snapshot_date]
+    partition_by: snapshot_date
+    optimize_zorder: [customer_id]
+    columns:
+      - {name: customer_id,            type: BIGINT}
+      - {name: snapshot_date,          type: DATE}
+      - {name: credit_score,           type: INT}
+      - {name: probability_of_default, type: DECIMAL(5,4)}
+      - {name: daily_txn_count,        type: BIGINT}
+      - {name: daily_total_amount,     type: DECIMAL(15,2)}
+      - {name: daily_failed_count,     type: BIGINT}
+      - {name: risk_level,             type: STRING}
+      - {name: computed_at,            type: TIMESTAMP}
+
+  # ── OJK regulatory reports (incremental_merge, Q2d / Q2e) ───────────────────
+
+  - name: customer_health_scorecard
+    target_table: negarabank.gold.customer_health_scorecard
+    sql_file: gold/q2d_customer_health_scorecard.sql
+    method: incremental_merge
+    merge_keys: [customer_id, report_month]
+    partition_by: report_month
+    optimize_zorder: [customer_id]
+    columns:
+      - {name: customer_id,            type: BIGINT}
+      - {name: report_month,           type: DATE}
+      - {name: total_balance,          type: DECIMAL(15,2)}
+      - {name: prev_month_balance,     type: DECIMAL(15,2)}
+      - {name: mom_balance_change_pct, type: DECIMAL(10,2)}
+      - {name: debit_count,            type: BIGINT}
+      - {name: credit_count,           type: BIGINT}
+      - {name: pending_count,          type: BIGINT}
+      - {name: failed_count,           type: BIGINT}
+      - {name: total_txn_count,        type: BIGINT}
+      - {name: avg_online_amount,      type: DECIMAL(15,2)}
+      - {name: avg_branch_amount,      type: DECIMAL(15,2)}
+      - {name: avg_atm_amount,         type: DECIMAL(15,2)}
+      - {name: avg_mobile_amount,      type: DECIMAL(15,2)}
+      - {name: credit_utilization_pct, type: DECIMAL(10,2)}
+      - {name: credit_score,           type: INT}
+      - {name: probability_of_default, type: DECIMAL(5,4)}
+      - {name: risk_flag,              type: BOOLEAN}
+      - {name: computed_at,            type: TIMESTAMP}
+
+  - name: fraud_detection_alerts
+    target_table: negarabank.gold.fraud_detection_alerts
+    sql_file: gold/q2e_fraud_detection_alerts.sql
+    method: incremental_merge
+    merge_keys: [customer_id, alert_type, alert_date]
+    partition_by: alert_date
+    optimize_zorder: [customer_id, alert_type]
+    columns:
+      - {name: customer_id,  type: BIGINT}
+      - {name: alert_type,   type: STRING}
+      - {name: alert_date,   type: DATE}
+      - {name: details_json, type: STRING}
+      - {name: computed_at,  type: TIMESTAMP}

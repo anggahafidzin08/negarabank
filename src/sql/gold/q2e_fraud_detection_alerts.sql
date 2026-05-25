@@ -1,112 +1,81 @@
 -- =============================================================================
--- Q2e: Fraud Detection Alert Patterns — Incremental MERGE
--- OJK regulatory report: flag suspicious customers for review
--- Two alert types (evaluated independently, both can fire per customer):
+-- Q2e: Fraud Detection Alert Patterns
+-- incremental_merge — watermark ${watermark_ts} scopes new Silver rows
+-- Grain: one row per (customer_id, alert_type, alert_date)
+-- Two alert types:
+--   VELOCITY_SPIKE — 5+ transactions within any single clock hour
+--   AMOUNT_SPIKE   — single transaction > 3× the customer's own 30-day average
 --
---   VELOCITY_SPIKE   — 5+ transactions within any single clock hour
---   AMOUNT_SPIKE     — single transaction > 3× the customer's own 30-day average
+-- Note: GEO_ANOMALY excluded — no location data in Silver transactions schema.
 --
--- Note: GEO_ANOMALY was excluded — no transaction location data exists in the
--- Silver schema (transactions: transaction_id, account_id, customer_id, amount,
--- txn_date, status; accounts: account_id, account_type, balance, status).
---
--- Incremental strategy (watermark-driven):
---   1. Find customers who have new Silver transactions since the last Gold run
---      (load_timestamp > ${watermark_ts}).
---   2. For those customers, read ALL their transactions within the 90-day
---      look-back window — not just the new ones. This is required because:
---        - VELOCITY_SPIKE groups by hour bucket: a new txn in an existing hour
---          must recompute the whole bucket's COUNT.
---        - AMOUNT_SPIKE uses a 30-day rolling AVG baseline: the window needs
---          prior transactions to produce a non-NULL avg_30d_amount.
---   3. Recompute both alert types for the affected customer set.
---   4. MERGE INTO Gold on (customer_id, alert_type, alert_date):
---        MATCHED     → UPDATE details_json + computed_at
---        NOT MATCHED → INSERT (new alert)
---
--- Why this scope expansion is safe:
---   Typically < 5% of customers transact on any given day. Expanding from
---   "new rows only" to "all rows for affected customers in 90 days" is still
---   O(active_customers × avg_txns_per_90d) vs O(all_customers × all_txns).
+-- Incremental scope:
+--   affected_customers — customer_ids with new Silver rows since watermark
+--   affected_txns      — ALL 90-day transactions for those customers, so:
+--     • VELOCITY_SPIKE bucket COUNTs include all txns in the hour, not just new
+--     • AMOUNT_SPIKE 30d AVG baseline has prior-day rows via RANGE BETWEEN
 -- =============================================================================
-
--- ── Step 1: Identify customers with new Silver transactions ────────────────
--- Scoped to the 90-day look-back window so we don't chase ancient watermarks.
-CREATE OR REPLACE TEMP VIEW affected_customers AS
-SELECT DISTINCT customer_id
-FROM negarabank.silver.transactions
-WHERE is_current     = true
-  AND load_timestamp > '${watermark_ts}'
-  AND txn_date      >= DATEADD(DAY, -90, CURRENT_DATE());
-
-
--- ── Step 2: Full transaction context for affected customers ────────────────
--- Pull all non-failed transactions for these customers within the look-back
--- window. The broader window feeds the 30-day AVG baseline and bucket counts.
-CREATE OR REPLACE TEMP VIEW affected_txns AS
-SELECT
-  customer_id,
-  transaction_id,
-  amount,
-  txn_date,
-  status
-FROM negarabank.silver.transactions
-WHERE is_current    = true
-  AND customer_id  IN (SELECT customer_id FROM affected_customers)
-  AND txn_date     >= DATEADD(DAY, -90, CURRENT_DATE())
-  AND UPPER(status) NOT IN ('FAILED', 'REVERSED');
-
-
--- ── Step 3: Recompute both alert types for affected customers ───────────────
-CREATE OR REPLACE TEMP VIEW fraud_alerts_incremental AS
-
 WITH
 
--- 1. VELOCITY_SPIKE: 5+ transactions in any 1-hour bucket
+affected_customers AS (
+  SELECT DISTINCT customer_id
+  FROM negarabank.silver.transactions
+  WHERE is_current     = true
+    AND load_timestamp > '${watermark_ts}'
+    AND txn_date      >= DATEADD(DAY, -90, CURRENT_DATE())
+),
+
+affected_txns AS (
+  SELECT
+    customer_id,
+    transaction_id,
+    amount,
+    txn_date,
+    status
+  FROM negarabank.silver.transactions
+  WHERE is_current   = true
+    AND customer_id  IN (SELECT customer_id FROM affected_customers)
+    AND txn_date    >= DATEADD(DAY, -90, CURRENT_DATE())
+    AND UPPER(status) NOT IN ('FAILED', 'REVERSED')
+),
+
 velocity_alerts AS (
   SELECT
     customer_id,
-    DATE_TRUNC('hour', txn_date)          AS window_start,
-    CAST(DATE(txn_date) AS DATE)          AS alert_date,
-    COUNT(*)                              AS txn_count,
-    SUM(amount)                           AS window_total_amount,
-    MIN(amount)                           AS min_amount,
-    MAX(amount)                           AS max_amount
+    DATE_TRUNC('hour', txn_date)         AS window_start,
+    CAST(DATE(txn_date) AS DATE)         AS alert_date,
+    COUNT(*)                             AS txn_count,
+    ROUND(SUM(amount), 2)                AS window_total_amount,
+    ROUND(MIN(amount), 2)                AS min_amount,
+    ROUND(MAX(amount), 2)                AS max_amount
   FROM affected_txns
   GROUP BY customer_id, DATE_TRUNC('hour', txn_date), CAST(DATE(txn_date) AS DATE)
   HAVING COUNT(*) >= 5
 ),
 
--- 2a. AMOUNT_SPIKE baseline: 30-day rolling avg per customer per day
--- Using all 90 days of affected_txns so the window has prior-day context.
--- RANGE BETWEEN 30 PRECEDING AND 1 PRECEDING excludes same-day transactions
--- to avoid the spiking txn inflating its own baseline.
 customer_30d_avg AS (
   SELECT
     customer_id,
-    CAST(DATE(txn_date) AS DATE)          AS txn_day,
+    CAST(DATE(txn_date) AS DATE)         AS txn_day,
     AVG(amount) OVER (
       PARTITION BY customer_id
       ORDER BY CAST(DATE(txn_date) AS DATE)
       RANGE BETWEEN 30 PRECEDING AND 1 PRECEDING
-    )                                     AS avg_30d_amount
+    )                                    AS avg_30d_amount
   FROM affected_txns
 ),
 
--- 2b. Flag transactions that exceed 3× the customer's own baseline
 amount_spike_raw AS (
   SELECT
     t.customer_id,
-    t.transaction_id,
+    CAST(DATE(t.txn_date) AS DATE)       AS alert_date,
     t.amount,
-    CAST(DATE(t.txn_date) AS DATE)        AS alert_date,
     ca.avg_30d_amount,
     t.amount / NULLIF(ca.avg_30d_amount, 0) AS spike_ratio
   FROM affected_txns t
   JOIN customer_30d_avg ca
     ON  t.customer_id                    = ca.customer_id
     AND CAST(DATE(t.txn_date) AS DATE)   = ca.txn_day
-  WHERE t.amount    > ca.avg_30d_amount * 3
+  WHERE t.amount      > ca.avg_30d_amount * 3
     AND ca.avg_30d_amount IS NOT NULL
 ),
 
@@ -114,52 +83,45 @@ amount_alerts AS (
   SELECT
     customer_id,
     alert_date,
-    COUNT(*)                              AS spike_txn_count,
-    MAX(amount)                           AS max_spike_amount,
-    MAX(spike_ratio)                      AS max_spike_ratio,
-    AVG(avg_30d_amount)                   AS baseline_avg_amount
+    COUNT(*)                             AS spike_txn_count,
+    ROUND(MAX(amount), 2)                AS max_spike_amount,
+    ROUND(MAX(spike_ratio), 2)           AS max_spike_ratio,
+    ROUND(AVG(avg_30d_amount), 2)        AS baseline_avg_amount
   FROM amount_spike_raw
   GROUP BY customer_id, alert_date
 )
 
-SELECT
-  v.customer_id,
-  'VELOCITY_SPIKE'                        AS alert_type,
-  v.alert_date,
-  TO_JSON(NAMED_STRUCT(
-    'window_start',        CAST(v.window_start AS STRING),
-    'txn_count',           v.txn_count,
-    'window_total_amount', ROUND(v.window_total_amount, 2),
-    'min_amount',          ROUND(v.min_amount, 2),
-    'max_amount',          ROUND(v.max_amount, 2)
-  ))                                      AS details_json,
-  CURRENT_TIMESTAMP()                     AS computed_at
-FROM velocity_alerts v
-
-UNION ALL
-
-SELECT
-  a.customer_id,
-  'AMOUNT_SPIKE'                          AS alert_type,
-  a.alert_date,
-  TO_JSON(NAMED_STRUCT(
-    'spike_txn_count',     a.spike_txn_count,
-    'max_spike_amount',    ROUND(a.max_spike_amount, 2),
-    'max_spike_ratio',     ROUND(a.max_spike_ratio, 2),
-    'baseline_avg_amount', ROUND(a.baseline_avg_amount, 2)
-  ))                                      AS details_json,
-  CURRENT_TIMESTAMP()                     AS computed_at
-FROM amount_alerts a;
-
-
--- ── Step 4: MERGE incremental result into the Gold table ───────────────────
--- Composite key: (customer_id, alert_type, alert_date)
--- A customer can trigger both alert types on the same day → separate rows.
--- MATCHED UPDATE refreshes details_json if a bucket was recomputed (e.g.
--- more transactions arrived in the same hour, raising the txn_count).
-
 MERGE INTO negarabank.gold.fraud_detection_alerts AS target
-USING fraud_alerts_incremental AS source
+USING (
+  SELECT
+    customer_id,
+    'VELOCITY_SPIKE'                     AS alert_type,
+    alert_date,
+    TO_JSON(NAMED_STRUCT(
+      'window_start',        CAST(window_start AS STRING),
+      'txn_count',           txn_count,
+      'window_total_amount', window_total_amount,
+      'min_amount',          min_amount,
+      'max_amount',          max_amount
+    ))                                   AS details_json,
+    CURRENT_TIMESTAMP()                  AS computed_at
+  FROM velocity_alerts
+
+  UNION ALL
+
+  SELECT
+    customer_id,
+    'AMOUNT_SPIKE'                       AS alert_type,
+    alert_date,
+    TO_JSON(NAMED_STRUCT(
+      'spike_txn_count',     spike_txn_count,
+      'max_spike_amount',    max_spike_amount,
+      'max_spike_ratio',     max_spike_ratio,
+      'baseline_avg_amount', baseline_avg_amount
+    ))                                   AS details_json,
+    CURRENT_TIMESTAMP()                  AS computed_at
+  FROM amount_alerts
+) AS source
 ON  target.customer_id = source.customer_id
 AND target.alert_type  = source.alert_type
 AND target.alert_date  = source.alert_date
@@ -168,4 +130,4 @@ WHEN MATCHED THEN UPDATE SET
   details_json = source.details_json,
   computed_at  = source.computed_at
 
-WHEN NOT MATCHED THEN INSERT *;
+WHEN NOT MATCHED THEN INSERT *
