@@ -1,5 +1,5 @@
 # Batch ETL Job: Oracle → Bronze → Silver → Gold medallion pipeline
-# Schedule: 2 AM UTC daily | Expected Duration: 15-30 minutes
+# Schedule: 2 AM Asia/Jakarta daily | Expected Duration: 15-30 minutes
 # Cluster: ephemeral job_cluster (spins up/down per run — cost efficient)
 
 resources:
@@ -9,7 +9,8 @@ resources:
       description: Extract from Oracle, transform, load to medallion layers
       schedule:
         quartz_cron_expression: "0 0 2 * * ?"
-        timezone_id: UTC
+        timezone_id: Asia/Jakarta
+        pause_status: PAUSED  # Start in paused state to avoid unintended runs during setup
 
       job_clusters:
         - job_cluster_key: batch_cluster
@@ -44,8 +45,6 @@ resources:
             parameters:
               - "--table"
               - "TRANSACTIONS"
-          depends_on:
-            - task_key: extract_accounts
           timeout_seconds: 3600
 
         - task_key: extract_credit_scores
@@ -160,3 +159,11 @@ resources:
             - task_key: transform_transactions
             - task_key: transform_accounts
           timeout_seconds: 3600
+
+        - task_key: account_snapshot_trigger
+          run_job_task:
+            job_id: ${resources.jobs.account_snapshot_job.id}
+          depends_on:
+            - task_key: build_dim_account
+            - task_key: build_fact_transactions
+          timeout_seconds: 1800

@@ -3,9 +3,6 @@ resources:
     account_snapshot_job:
       name: Account Daily Snapshot + Credit Scoring Pipeline
       description: Builds account_daily_snapshot from fact_transactions, then triggers credit scoring
-      schedule:
-        quartz_cron_expression: "0 0 5 * * ?"  # 5 AM UTC, after batch_etl_job completes
-        timezone_id: UTC
 
       job_clusters:
         - job_cluster_key: snapshot_cluster
