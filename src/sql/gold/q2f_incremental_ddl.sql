@@ -1,210 +1,124 @@
 -- =============================================================================
--- Q2f: Incremental Refresh Optimization Strategy
--- Demonstrates three production-grade incremental patterns for the Gold layer
--- targeting an 8M-account / 60M+ transaction dataset on Databricks.
+-- Q2f: Incremental Silver → Gold Transformation Strategy
 --
--- PATTERN SELECTION GUIDE
--- ─────────────────────────────────────────────────────────────────────────────
--- | Pattern              | Latency   | Complexity | Best for                 |
--- |----------------------|-----------|------------|--------------------------|
--- | A. dbt incremental   | Batch     | Low        | Batch ETL, team knows SQL|
--- | B. DLT APPLY CHANGES | Near-RT   | Medium     | CDC / append-only Bronze |
--- | C. Materialized View | On-demand | Very low   | BI dashboards, ad hoc    |
--- ─────────────────────────────────────────────────────────────────────────────
+-- Problem statement:
+--   The Gold layer (customer_health_scorecard, fraud_detection_alerts) must
+--   be refreshed nightly without scanning all Silver history on every run.
+--   8M accounts × 24+ months = 192M+ Silver rows if done as a full rebuild.
 --
--- For the NegaraBank nightly batch pipeline, PATTERN A is recommended:
---   - Aligns with existing 2 AM batch window
---   - dbt handles MERGE logic, lineage docs, and DQ tests
---   - Zero streaming infrastructure overhead
+-- Design decision: watermark-driven incremental MERGE
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Silver tables carry three metadata columns written by the SCD2 transformer:
+--
+--   load_timestamp        TIMESTAMP  — when the row entered Silver (set by
+--                                      bronze_extractor._add_metadata)
+--   effective_start_date  DATE       — business date the version became active
+--   is_current            BOOLEAN    — TRUE for the live version of a record
+--
+-- These are the control columns we use to detect what is new since the last
+-- Gold run, avoiding a full table scan.
 -- =============================================================================
 
 
--- ═══════════════════════════════════════════════════════════════════════════════
--- PATTERN A: dbt Incremental Model (recommended for batch ETL)
--- File: models/gold/customer_health_scorecard.sql
--- Config block tells dbt to generate a MERGE statement instead of full refresh
--- ═══════════════════════════════════════════════════════════════════════════════
-
--- dbt model config (JINJA block — not plain SQL, shown for reference)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- WATERMARK PATTERN
 --
--- {{ config(
---     materialized   = 'incremental',
---     unique_key     = ['customer_id', 'report_month'],
---     incremental_strategy = 'merge',
---     merge_update_columns = [
---         'total_balance', 'prev_month_balance', 'mom_balance_change_pct',
---         'debit_count', 'credit_count', 'pending_count', 'failed_count',
---         'total_txn_count', 'credit_utilization_pct',
---         'credit_score', 'probability_of_default', 'risk_flag', 'computed_at'
---     ],
---     partition_by   = {'field': 'report_month', 'data_type': 'date'},
---     file_format    = 'delta',
---     post_hook      = "OPTIMIZE {{ this }} ZORDER BY (customer_id)"
--- ) }}
+-- Each Gold table self-documents when it was last computed via computed_at.
+-- The notebook reads this value before running SQL and passes it as a parameter.
+-- On first run (table does not exist) the notebook substitutes '1970-01-01',
+-- triggering a full backfill through the same code path — no special-case logic.
+-- ══════════════════════════════════════════════════════════════════════════════
 
--- Core query — dbt injects the WHERE clause when running incrementally:
+-- Notebook reads watermark (Python, in 08_build_customer_health_scorecard.py):
 --
--- WITH account_monthly AS (
---   SELECT ...
---   FROM {{ ref('silver_accounts') }}
---   {% if is_incremental() %}
---   WHERE DATE_TRUNC('month', COALESCE(effective_start_date, load_date))
---         >= DATE_TRUNC('month', DATEADD(MONTH, -1, CURRENT_DATE()))
---   {% endif %}
--- ), ...
+--   if spark.catalog.tableExists("negarabank.gold.customer_health_scorecard"):
+--       row = spark.sql(
+--           "SELECT MAX(computed_at) FROM negarabank.gold.customer_health_scorecard"
+--       ).collect()[0][0]
+--       watermark_ts = str(row) if row else "1970-01-01 00:00:00"
+--   else:
+--       watermark_ts = "1970-01-01 00:00:00"   -- full backfill on first run
+--   spark.sql(f"SET watermark_ts = '{watermark_ts}'")
 
--- Plain-SQL equivalent of the incremental MERGE dbt generates at run time:
-MERGE INTO negarabank.gold.customer_health_scorecard AS target
-USING (
-  -- Recompute only the last two report months (current + prior for MoM accuracy)
-  SELECT
-    mb.customer_id,
-    mb.report_month,
-    ROUND(mb.total_balance, 2)                                         AS total_balance,
-    ROUND(mb.prev_month_balance, 2)                                    AS prev_month_balance,
-    ROUND((mb.total_balance - mb.prev_month_balance)
-          / NULLIF(mb.prev_month_balance, 0) * 100, 2)                AS mom_balance_change_pct,
-    COALESCE(mt.debit_count,   0)                                      AS debit_count,
-    COALESCE(mt.credit_count,  0)                                      AS credit_count,
-    COALESCE(mt.pending_count, 0)                                      AS pending_count,
-    COALESCE(mt.failed_count,  0)                                      AS failed_count,
-    COALESCE(mt.total_txn_count, 0)                                    AS total_txn_count,
-    ROUND(mb.credit_balance / NULLIF(mb.total_credit_limit, 0) * 100, 2) AS credit_utilization_pct,
-    cs.credit_score,
-    cs.probability_of_default,
-    CASE WHEN
-         (mb.credit_balance / NULLIF(mb.total_credit_limit, 0)) > 0.80
-      OR  cs.probability_of_default > 0.3
-      OR  (mb.total_balance - mb.prev_month_balance)
-            / NULLIF(mb.prev_month_balance, 0) < -0.30
-    THEN TRUE ELSE FALSE END                                           AS risk_flag,
-    CURRENT_TIMESTAMP()                                                AS computed_at
-  FROM (
-    SELECT
-      customer_id,
-      DATE_TRUNC('month', COALESCE(effective_start_date, load_date)) AS report_month,
-      SUM(balance)                                                    AS total_balance,
-      SUM(CASE WHEN UPPER(account_type) = 'CREDIT' THEN balance      ELSE 0    END) AS credit_balance,
-      SUM(CASE WHEN UPPER(account_type) = 'CREDIT' THEN credit_limit ELSE NULL END) AS total_credit_limit,
-      LAG(SUM(balance)) OVER (
-        PARTITION BY customer_id
-        ORDER BY DATE_TRUNC('month', COALESCE(effective_start_date, load_date))
-      )                                                               AS prev_month_balance
-    FROM negarabank.silver.accounts
-    WHERE is_current = true
-      -- Incremental filter: only accounts active in the last 2 months
-      AND COALESCE(effective_start_date, load_date)
-          >= DATEADD(MONTH, -2, DATE_TRUNC('month', CURRENT_DATE()))
-    GROUP BY customer_id,
-             DATE_TRUNC('month', COALESCE(effective_start_date, load_date))
-  ) mb
-  LEFT JOIN (
-    SELECT
-      customer_id,
-      DATE_TRUNC('month', txn_date)                                   AS report_month,
-      COUNT(CASE WHEN UPPER(status) = 'DEBIT'   THEN 1 END)          AS debit_count,
-      COUNT(CASE WHEN UPPER(status) = 'CREDIT'  THEN 1 END)          AS credit_count,
-      COUNT(CASE WHEN UPPER(status) = 'PENDING' THEN 1 END)          AS pending_count,
-      COUNT(CASE WHEN UPPER(status) = 'FAILED'  THEN 1 END)          AS failed_count,
-      COUNT(*)                                                         AS total_txn_count
-    FROM negarabank.silver.transactions
-    WHERE is_current = true
-      AND txn_date >= DATEADD(MONTH, -2, DATE_TRUNC('month', CURRENT_DATE()))
-    GROUP BY customer_id, DATE_TRUNC('month', txn_date)
-  ) mt ON mb.customer_id = mt.customer_id AND mb.report_month = mt.report_month
-  LEFT JOIN (
-    SELECT customer_id, score AS credit_score, probability_of_default
-    FROM negarabank.bronze.credit_scores
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY load_timestamp DESC) = 1
-  ) cs ON mb.customer_id = cs.customer_id
-) AS source
-
-ON  target.customer_id  = source.customer_id
-AND target.report_month = source.report_month
-
-WHEN MATCHED THEN UPDATE SET *
-WHEN NOT MATCHED THEN INSERT *;
+-- The SQL then filters Silver using ${watermark_ts}:
+--
+--   WHERE load_timestamp > '${watermark_ts}'
 
 
--- ═══════════════════════════════════════════════════════════════════════════════
--- PATTERN B: Delta Live Tables (DLT) — APPLY CHANGES INTO for CDC
--- Suited for near-real-time refresh when Bronze receives CDC from Debezium/Kafka
--- ═══════════════════════════════════════════════════════════════════════════════
-
--- DLT pipeline definition (Python API — shown as SQL-style pseudocode)
--- Requires: DLT pipeline in Databricks workspace, not a standalone SQL script
-
-/*
-CREATE OR REFRESH STREAMING TABLE silver_accounts_cdc
-COMMENT 'SCD1 view of accounts — latest state only (DLT CDC pattern)'
-AS APPLY CHANGES INTO negarabank.silver.accounts_cdc
-FROM STREAM(negarabank.bronze.accounts_raw_cdc)
-KEYS (account_id)
-SEQUENCE BY load_timestamp
-STORED AS SCD TYPE 1;
-*/
-
--- For SCD2 (full history), use TYPE 2:
-/*
-CREATE OR REFRESH STREAMING TABLE silver_accounts_history
-COMMENT 'SCD2 full history of accounts'
-AS APPLY CHANGES INTO negarabank.silver.accounts_history
-FROM STREAM(negarabank.bronze.accounts_raw_cdc)
-KEYS (account_id)
-SEQUENCE BY load_timestamp
-STORED AS SCD TYPE 2;
-*/
+-- ══════════════════════════════════════════════════════════════════════════════
+-- WHY load_timestamp AND NOT load_date?
+--
+-- load_date is a partition column (DATE precision). Using it as a watermark
+-- would force reprocessing an entire day's partitions even for a 1-row change.
+-- load_timestamp has microsecond precision and is written by _add_metadata()
+-- in the Bronze extractor at extraction time, then propagated through Silver
+-- unchanged. It accurately reflects when each row entered the pipeline.
+-- ══════════════════════════════════════════════════════════════════════════════
 
 
--- ═══════════════════════════════════════════════════════════════════════════════
--- PATTERN C: Materialized View (Databricks SQL — on-demand refresh for BI)
--- Best for analyst-facing dashboards queried via Databricks SQL warehouses
--- ═══════════════════════════════════════════════════════════════════════════════
-
-CREATE OR REPLACE MATERIALIZED VIEW negarabank.gold.mv_customer_risk_summary
-COMMENT 'Pre-aggregated risk summary for BI dashboards — refreshed nightly'
-AS
-SELECT
-  cs.customer_id,
-  c.full_name,
-  c.segment,
-  c.risk_category,
-  DATE_TRUNC('month', CURRENT_DATE())      AS snapshot_month,
-  cs.credit_score,
-  cs.probability_of_default,
-  hs.total_balance,
-  hs.credit_utilization_pct,
-  hs.mom_balance_change_pct,
-  hs.risk_flag,
-  COUNT(fa.alert_type)                     AS open_alert_count,
-  COLLECT_SET(fa.alert_type)               AS alert_types
-FROM negarabank.gold.customer_health_scorecard hs
-JOIN negarabank.silver.customers              c  ON hs.customer_id = c.customer_id
-                                                 AND c.is_current = true
-JOIN negarabank.bronze.credit_scores          cs ON hs.customer_id = cs.customer_id
-LEFT JOIN negarabank.gold.fraud_detection_alerts fa
-  ON  hs.customer_id  = fa.customer_id
-  AND fa.alert_date  >= DATEADD(DAY, -30, CURRENT_DATE())
-WHERE hs.report_month = DATE_TRUNC('month', DATEADD(MONTH, -1, CURRENT_DATE()))
-GROUP BY
-  cs.customer_id, c.full_name, c.segment, c.risk_category,
-  cs.credit_score, cs.probability_of_default,
-  hs.total_balance, hs.credit_utilization_pct,
-  hs.mom_balance_change_pct, hs.risk_flag;
+-- ══════════════════════════════════════════════════════════════════════════════
+-- MERGE SEMANTICS FOR GOLD TABLES
+--
+-- Gold tables are not append-only: a customer's health score for March 2025
+-- might change if a retroactive Silver correction arrives in May 2025.
+-- We therefore MERGE rather than append:
+--
+--   MATCHED     → UPDATE all metric columns (recomputed value replaces old one)
+--   NOT MATCHED → INSERT  (new customer or new month first seen)
+--
+-- This keeps the Gold table correct under late-arriving data without any manual
+-- DELETE + re-INSERT logic.
+-- ══════════════════════════════════════════════════════════════════════════════
 
 
--- ═══════════════════════════════════════════════════════════════════════════════
--- PARTITION MAINTENANCE: OPTIMIZE + ZORDER (run after incremental loads)
--- Keep in a post-hook or a separate maintenance task in batch_etl_job.yml
--- ═══════════════════════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════════════════════
+-- AFFECTED-KEY SCOPING (why we can't just filter the final SELECT)
+--
+-- The health scorecard uses LAG() to compute MoM balance change.
+-- If we filter account_monthly to load_timestamp > watermark before the LAG,
+-- the prior month's balance is missing and prev_month_balance is always NULL.
+--
+-- Solution (see q2d_customer_health_scorecard.sql):
+--   Step 1 — build affected_keys: (customer_id, report_month) pairs that have
+--             new Silver rows since the watermark.
+--   Step 2 — expand to full customer scope for the LAG window:
+--             WHERE customer_id IN (SELECT customer_id FROM affected_keys)
+--             This reads all months for those customers, giving LAG() its context.
+--   Step 3 — filter back to affected_keys in the final JOIN before MERGE,
+--             so we only write rows that actually changed.
+--
+-- This pattern reads O(customers_with_changes × months_per_customer) rows
+-- rather than O(all_customers × all_months).
+-- ══════════════════════════════════════════════════════════════════════════════
 
--- Run monthly to compact small files and re-order data for query pruning:
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- PARTITION MAINTENANCE (run as post-task in batch_etl_job.yml)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- After each nightly MERGE, compact small files and re-order for query pruning.
+-- Databricks autoOptimize handles write-time compaction; ZORDER improves reads:
 OPTIMIZE negarabank.gold.customer_health_scorecard
   ZORDER BY (customer_id);
 
 OPTIMIZE negarabank.gold.fraud_detection_alerts
   ZORDER BY (customer_id, alert_type);
 
--- Vacuum old Delta versions after 7-day retention window:
+-- Retain 7 days of Delta history (enough for rollback; reduces storage cost):
 VACUUM negarabank.gold.customer_health_scorecard RETAIN 168 HOURS;
 VACUUM negarabank.gold.fraud_detection_alerts    RETAIN 168 HOURS;
+
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- SUMMARY: incremental flow per nightly run
+--
+--   Bronze extractor  → writes new rows to Silver partitions (load_date = today)
+--                        with load_timestamp = now()
+--   Silver transformer → SCD2 MERGE: new/changed records get is_current = true,
+--                        load_timestamp carried through from Bronze
+--   Gold notebook     → reads MAX(computed_at) from Gold table  [watermark]
+--                        builds affected_keys WHERE load_timestamp > watermark
+--                        recomputes metrics for those keys
+--                        MERGE INTO Gold (UPDATE existing, INSERT new)
+--                        OPTIMIZE ZORDER (post-hook)
+-- ══════════════════════════════════════════════════════════════════════════════
