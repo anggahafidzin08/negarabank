@@ -13,11 +13,18 @@ variables:
     description: Prod Databricks workspace URL
     default: https://your-workspace-prod.cloud.databricks.com
 
+  etl_job_owner_email:
+    description: Email for job owner failure notifications
+    default:
 
 targets:
   dev:
     workspace:
       host: https://dbc-d2fb7e57-7756.cloud.databricks.com/
+    
+    variables:
+      etl_job_owner_email:
+        - hafidzin.angga@outlook.com
 
   prod:
     workspace:

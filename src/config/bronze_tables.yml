@@ -4,6 +4,11 @@ tables:
     method: full_snapshot
     write_mode: overwrite
 
+  - name: CUSTOMERS
+    bronze_table: customers
+    method: full_snapshot
+    write_mode: overwrite
+
   - name: TRANSACTIONS
     bronze_table: transactions
     method: delta_load
