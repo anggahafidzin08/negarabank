@@ -25,13 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Databricks CLI
-        run: pip install databricks-cli
+      - name: Set up Databricks CLI
+        uses: databricks/setup-databricks@v3
 
       - name: Deploy bundle
         env:
