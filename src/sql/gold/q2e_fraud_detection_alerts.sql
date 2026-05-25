@@ -1,22 +1,25 @@
 -- =============================================================================
 -- Q2e: Fraud Detection Alert Patterns — Incremental MERGE
 -- OJK regulatory report: flag suspicious customers for review
--- Three alert types (evaluated independently, all three can fire per customer):
+-- Two alert types (evaluated independently, both can fire per customer):
 --
 --   VELOCITY_SPIKE   — 5+ transactions within any single clock hour
---   GEO_ANOMALY      — transactions in 3+ distinct cities on the same calendar day
 --   AMOUNT_SPIKE     — single transaction > 3× the customer's own 30-day average
+--
+-- Note: GEO_ANOMALY was excluded — no transaction location data exists in the
+-- Silver schema (transactions: transaction_id, account_id, customer_id, amount,
+-- txn_date, status; accounts: account_id, account_type, balance, status).
 --
 -- Incremental strategy (watermark-driven):
 --   1. Find customers who have new Silver transactions since the last Gold run
 --      (load_timestamp > ${watermark_ts}).
 --   2. For those customers, read ALL their transactions within the 90-day
 --      look-back window — not just the new ones. This is required because:
---        - VELOCITY_SPIKE and GEO_ANOMALY group by time bucket: a new txn in
---          an existing hour/day must recompute the whole bucket's COUNT.
+--        - VELOCITY_SPIKE groups by hour bucket: a new txn in an existing hour
+--          must recompute the whole bucket's COUNT.
 --        - AMOUNT_SPIKE uses a 30-day rolling AVG baseline: the window needs
 --          prior transactions to produce a non-NULL avg_30d_amount.
---   3. Recompute all three alert types for the affected customer set.
+--   3. Recompute both alert types for the affected customer set.
 --   4. MERGE INTO Gold on (customer_id, alert_type, alert_date):
 --        MATCHED     → UPDATE details_json + computed_at
 --        NOT MATCHED → INSERT (new alert)
@@ -32,9 +35,9 @@
 CREATE OR REPLACE TEMP VIEW affected_customers AS
 SELECT DISTINCT customer_id
 FROM negarabank.silver.transactions
-WHERE is_current      = true
-  AND load_timestamp  > '${watermark_ts}'
-  AND txn_date       >= DATEADD(DAY, -90, CURRENT_DATE());
+WHERE is_current     = true
+  AND load_timestamp > '${watermark_ts}'
+  AND txn_date      >= DATEADD(DAY, -90, CURRENT_DATE());
 
 
 -- ── Step 2: Full transaction context for affected customers ────────────────
@@ -42,23 +45,19 @@ WHERE is_current      = true
 -- window. The broader window feeds the 30-day AVG baseline and bucket counts.
 CREATE OR REPLACE TEMP VIEW affected_txns AS
 SELECT
-  t.customer_id,
-  t.transaction_id,
-  t.amount,
-  t.txn_date,
-  t.status,
-  a.branch_city
-FROM negarabank.silver.transactions t
-LEFT JOIN negarabank.silver.accounts a
-  ON  t.account_id = a.account_id
-  AND a.is_current = true
-WHERE t.is_current = true
-  AND t.customer_id IN (SELECT customer_id FROM affected_customers)
-  AND t.txn_date   >= DATEADD(DAY, -90, CURRENT_DATE())
-  AND UPPER(t.status) NOT IN ('FAILED', 'REVERSED');
+  customer_id,
+  transaction_id,
+  amount,
+  txn_date,
+  status
+FROM negarabank.silver.transactions
+WHERE is_current    = true
+  AND customer_id  IN (SELECT customer_id FROM affected_customers)
+  AND txn_date     >= DATEADD(DAY, -90, CURRENT_DATE())
+  AND UPPER(status) NOT IN ('FAILED', 'REVERSED');
 
 
--- ── Step 3: Recompute all three alert types for affected customers ──────────
+-- ── Step 3: Recompute both alert types for affected customers ───────────────
 CREATE OR REPLACE TEMP VIEW fraud_alerts_incremental AS
 
 WITH
@@ -78,20 +77,7 @@ velocity_alerts AS (
   HAVING COUNT(*) >= 5
 ),
 
--- 2. GEO_ANOMALY: 3+ distinct cities on a single calendar day
-geo_alerts AS (
-  SELECT
-    customer_id,
-    CAST(DATE(txn_date) AS DATE)          AS alert_date,
-    COUNT(DISTINCT branch_city)           AS distinct_cities,
-    COLLECT_LIST(DISTINCT branch_city)    AS cities_list
-  FROM affected_txns
-  WHERE branch_city IS NOT NULL
-  GROUP BY customer_id, CAST(DATE(txn_date) AS DATE)
-  HAVING COUNT(DISTINCT branch_city) >= 3
-),
-
--- 3a. AMOUNT_SPIKE baseline: 30-day rolling avg per customer per day
+-- 2a. AMOUNT_SPIKE baseline: 30-day rolling avg per customer per day
 -- Using all 90 days of affected_txns so the window has prior-day context.
 -- RANGE BETWEEN 30 PRECEDING AND 1 PRECEDING excludes same-day transactions
 -- to avoid the spiking txn inflating its own baseline.
@@ -107,7 +93,7 @@ customer_30d_avg AS (
   FROM affected_txns
 ),
 
--- 3b. Flag transactions that exceed 3× the customer's own baseline
+-- 2b. Flag transactions that exceed 3× the customer's own baseline
 amount_spike_raw AS (
   SELECT
     t.customer_id,
@@ -118,9 +104,9 @@ amount_spike_raw AS (
     t.amount / NULLIF(ca.avg_30d_amount, 0) AS spike_ratio
   FROM affected_txns t
   JOIN customer_30d_avg ca
-    ON  t.customer_id                      = ca.customer_id
-    AND CAST(DATE(t.txn_date) AS DATE)     = ca.txn_day
-  WHERE t.amount      > ca.avg_30d_amount * 3
+    ON  t.customer_id                    = ca.customer_id
+    AND CAST(DATE(t.txn_date) AS DATE)   = ca.txn_day
+  WHERE t.amount    > ca.avg_30d_amount * 3
     AND ca.avg_30d_amount IS NOT NULL
 ),
 
@@ -136,7 +122,6 @@ amount_alerts AS (
   GROUP BY customer_id, alert_date
 )
 
--- UNION ALL three types into a single result set
 SELECT
   v.customer_id,
   'VELOCITY_SPIKE'                        AS alert_type,
@@ -150,19 +135,6 @@ SELECT
   ))                                      AS details_json,
   CURRENT_TIMESTAMP()                     AS computed_at
 FROM velocity_alerts v
-
-UNION ALL
-
-SELECT
-  g.customer_id,
-  'GEO_ANOMALY'                           AS alert_type,
-  g.alert_date,
-  TO_JSON(NAMED_STRUCT(
-    'distinct_cities', g.distinct_cities,
-    'cities',          CAST(g.cities_list AS STRING)
-  ))                                      AS details_json,
-  CURRENT_TIMESTAMP()                     AS computed_at
-FROM geo_alerts g
 
 UNION ALL
 
@@ -182,9 +154,9 @@ FROM amount_alerts a;
 
 -- ── Step 4: MERGE incremental result into the Gold table ───────────────────
 -- Composite key: (customer_id, alert_type, alert_date)
--- A customer can trigger the same alert type on different days → NOT MATCHED.
--- If today's run recomputes an existing (customer, type, day) → MATCHED UPDATE
--- to refresh details_json (e.g. txn_count grew within the same hour bucket).
+-- A customer can trigger both alert types on the same day → separate rows.
+-- MATCHED UPDATE refreshes details_json if a bucket was recomputed (e.g.
+-- more transactions arrived in the same hour, raising the txn_count).
 
 MERGE INTO negarabank.gold.fraud_detection_alerts AS target
 USING fraud_alerts_incremental AS source
