@@ -26,3 +26,11 @@ tables:
     bronze_table: support_tickets
     method: full_snapshot
     write_mode: overwrite
+
+# sample for partitioned load - uncomment and edit as needed
+  # - name: CREDIT_SCORES
+  #   bronze_table: credit_scores
+  #   method: partitioned_load
+  #   partition_column: score_id
+  #   num_partitions: 8
+  #   write_mode: overwrite

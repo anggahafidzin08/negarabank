@@ -35,6 +35,7 @@ resources:
             parameters: ["--table", "account_daily_snapshot"]
           depends_on: []
           timeout_seconds: 3600
+          max_retries: 3
 
         # Placeholder: credit scoring reads account_daily_snapshot as feature input
         # and writes predictions back to a credit_scores Gold table or Feature Store
@@ -45,3 +46,4 @@ resources:
           depends_on:
             - task_key: build_account_daily_snapshot
           timeout_seconds: 3600
+          max_retries: 3
