@@ -19,6 +19,8 @@ resources:
               spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
               spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
 
+      email_notifications:
+        on_failure: ${var.snapshot_job_owner_email}
       tasks:
         - task_key: build_account_daily_snapshot
           job_cluster_key: snapshot_cluster

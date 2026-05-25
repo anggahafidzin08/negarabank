@@ -17,6 +17,10 @@ variables:
     description: Email for job owner failure notifications
     default:
 
+  snapshot_job_owner_email:
+    description: Email for job owner failure notifications
+    default:
+
 targets:
   dev:
     workspace:
@@ -24,6 +28,8 @@ targets:
     
     variables:
       etl_job_owner_email:
+        - hafidzin.angga@outlook.com
+      snapshot_job_owner_email:
         - hafidzin.angga@outlook.com
 
   prod:
