@@ -153,3 +153,22 @@ resources:
             - task_key: build_fact_transactions
             - task_key: build_dim_customer
           timeout_seconds: 1800
+
+        # ===== GOLD LAYER: OJK Regulatory Reports (Q2d / Q2e) =====
+        - task_key: build_customer_health_scorecard
+          job_cluster_key: batch_cluster
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/08_build_customer_health_scorecard.py
+          depends_on:
+            - task_key: transform_accounts
+            - task_key: transform_transactions
+          timeout_seconds: 3600
+
+        - task_key: build_fraud_detection_alerts
+          job_cluster_key: batch_cluster
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/notebooks/gold/09_build_fraud_detection_alerts.py
+          depends_on:
+            - task_key: transform_transactions
+            - task_key: transform_accounts
+          timeout_seconds: 3600
