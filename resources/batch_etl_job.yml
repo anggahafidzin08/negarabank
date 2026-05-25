@@ -19,18 +19,21 @@ resources:
           new_cluster:
             spark_version: 16.4.x-scala2.12
             node_type_id: r6i.large
-            num_workers: 2
+            autoscale:
+              min_workers: 2
+              max_workers: 4
             aws_attributes:
               availability: SPOT_WITH_FALLBACK
               zone_id: ap-southeast-1a
               ebs_volume_count: 1
-              ebs_volume_size: 100
+              ebs_volume_size: 200
               ebs_volume_type: GENERAL_PURPOSE_SSD
             spark_conf:
               spark.sql.adaptive.enabled: "true"
               spark.sql.adaptive.coalescePartitions.enabled: "true"
               spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
               spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+              spark.sql.adativeQueryExecution: "true"
 
       tasks:
         # ===== BRONZE LAYER: Extract (single script, table driven by --table arg) =====
